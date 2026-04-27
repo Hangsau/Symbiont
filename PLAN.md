@@ -350,6 +350,129 @@ python src/healthz.py
 
 ---
 
+### M6 — Rule Distillation（evolve.py 規則蒸餾）
+
+**背景**：`evolve.py` 只會 append 規則，長期使用後 `## 自動學習規則` section 會無限增長，導致重複、過時、稀釋高價值規則。
+
+**目標**：當規則數超過閾值，自動在加入新規則前先做一輪蒸餾（合併同類、移除冗餘），保持 section 精簡。
+
+---
+
+#### 觸發條件
+
+```
+現有規則數 + 本次新規則數 >= distill_threshold（config，預設 25）
+```
+
+檢查時機：`run()` 拿到 `new_rules` 後、實際寫入前。
+
+---
+
+#### 蒸餾流程（在正常 append 流程前插入）
+
+```
+取得本次 new_rules
+    │
+    ▼
+計算 existing_count = _count_section_rules(claude_md)
+    │
+    ├── existing_count + len(new_rules) < threshold
+    │       └─→ 走原有 append 路徑（不變）
+    │
+    └── 超過閾值
+            ▼
+        組 distillation prompt
+        （existing rules + CLAUDE.md 其餘部分 + new_rules）
+            ▼
+        run_claude() → 解析 JSON → 驗證
+            ├── 成功 → _replace_section_rules()
+            │          → append evolution_log（含 merge_summary）
+            │          → 跳過原有 append（new_rules 已含入蒸餾輸出）
+            └── 任何失敗 → error.log only → fallback 走原有 append
+```
+
+**Failsafe**：蒸餾是 best-effort，任何步驟失敗都 fallback 到正常 append，不中斷主流程。
+
+---
+
+#### Distillation Prompt 設計
+
+輸入給 Claude：
+- `existing_rules`：`## 自動學習規則` section 現有的所有 bullet
+- `claude_md_other`：CLAUDE.md 的其他 sections（用於去重，不重複已在其他 section 的規則）
+- `new_rules_to_add`：本次 session 萃取的新規則
+
+要求：
+- 合併語義重疊的規則
+- 移除已被 CLAUDE.md 其他 section 涵蓋的規則
+- 保留最具體可執行的版本（不保留觀念型、保留「遇 X 做 Y」型）
+- 將 `new_rules_to_add` 融入輸出（不另外 append）
+- 輸出數量必須少於輸入總數（否則蒸餾沒有意義）
+
+#### 輸出 Schema
+
+```json
+{
+  "distilled_rules": [
+    {"content": "- 規則描述（以 - 開頭的 markdown bullet）"}
+  ],
+  "merge_summary": "一句話描述做了哪些合併/移除（50 字以內）",
+  "removed_count": 3
+}
+```
+
+#### 驗證閘門
+
+| 檢查 | 不通過時的處理 |
+|------|--------------|
+| schema 結構正確 | fallback append |
+| `distilled_rules` 數量 >= 5 | fallback（防止過度裁剪） |
+| `distilled_rules` 數量 < existing + new | fallback（必須有縮減） |
+| 每條規則都是 `- ` 開頭 | fallback |
+
+---
+
+#### 新增函式（evolve.py）
+
+| 函式 | 功能 |
+|------|------|
+| `_count_section_rules(content)` | 計算 `## 自動學習規則` section 內的 bullet 數 |
+| `_extract_section_rules(content)` | 取出 section 內所有 bullet 的原文 |
+| `_extract_claude_md_rest(content)` | 取出 CLAUDE.md 中除了自動規則 section 以外的部分 |
+| `_build_distill_prompt(...)` | 組蒸餾用 prompt |
+| `_validate_distill_output(data, original_count)` | 驗證蒸餾輸出合法性 |
+| `_replace_section_rules(content, rules)` | 替換 section 內容（FileLock 保護） |
+
+`run()` 中新增的分支邏輯大約 20 行，其餘邏輯不動。
+
+---
+
+#### Config 新增
+
+```yaml
+evolve:
+  distill_threshold: 25   # 超過此數觸發蒸餾；0 = 停用
+```
+
+#### Evolution Log 格式（蒸餾觸發時）
+
+```
+## YYYY-MM-DD — [distillation] {merge_summary}
+- session: {uuid}
+- before: {existing_count + new_count} rules → after: {distilled_count} rules
+- removed: {removed_count}
+```
+
+---
+
+#### 不做的事（M6 範圍外）
+
+- 不做「規則效用追蹤」（D4）——蒸餾是結構性縮減，不是效用評估
+- 不做「用戶審批蒸餾結果」——全自動，靠驗證閘門保安全
+- 不做 CLAUDE.md 其他 section 的管理——只管 `## 自動學習規則`
+
+---
+
 ## 六、跨平台支援
 
 Python 程式碼完全共用，差異只在部署腳本：

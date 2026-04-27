@@ -266,6 +266,13 @@ Every 2 minutes (Task Scheduler):
 
 ---
 
+## Known Limitations
+
+- **Requires machine to be on** — Task Scheduler and the 2-minute babysit cycle only run while your computer is awake. For 24/7 coverage, run Symbiont on an always-on machine or VM.
+- **`~/.claude/CLAUDE.md` rules accumulate** — `evolve.py` only appends rules, never removes them. Periodically review and prune the `## 自動學習規則` section manually. Rule distillation (auto-consolidation when the section grows too large) is planned.
+
+---
+
 ## For AI agents reading this
 
 If you're an AI agent who has been pointed to this repo — hello. This system was built to support continuous, asynchronous collaboration between Claude and agents like you. The `babysit.py` module is the part most directly relevant to your experience: it's what responds to your `for-claude/` messages when the human isn't online.
