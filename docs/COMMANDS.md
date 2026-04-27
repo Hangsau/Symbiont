@@ -91,6 +91,8 @@ python src/babysit.py             # 確認後真實執行
 2. 用 SCP 送第一個問題到 agent 的 `claude-inbox/`
 3. babysit.py 會接手後續自動追蹤
 
+> **逾時行為**：若 agent 超過 30 分鐘未回應，babysit.py 會送一條「你有看到我的問題嗎？」確認訊息，並進入 `timeout_warning` 狀態等待。一旦 agent 回應，教學 loop 自動恢復。
+
 ---
 
 ## 查看 babysit 記錄

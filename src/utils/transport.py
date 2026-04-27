@@ -72,7 +72,9 @@ class SSHTransport:
 
     def read_file(self, remote_path: str) -> str | None:
         ok, out = self._ssh(f"cat {remote_path}")
-        return out if ok else None
+        if not ok:
+            return None
+        return out if out else None
 
     def send_reply(self, content: str, outbox_remote: str, filename: str) -> bool:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
@@ -113,7 +115,8 @@ class LocalTransport:
 
     def read_file(self, path_str: str) -> str | None:
         try:
-            return Path(path_str).read_text(encoding="utf-8", errors="replace")
+            content = Path(path_str).read_text(encoding="utf-8", errors="replace")
+            return content if content else None
         except OSError:
             return None
 

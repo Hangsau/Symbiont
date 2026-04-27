@@ -302,7 +302,7 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
     ts_file = agent_cfg.get("teaching_state_file", f"data/teaching_state/{agent_name}.json")
     teaching = _load_teaching_state(base_dir, ts_file)
 
-    if teaching.status not in ("active", "waiting_reply"):
+    if teaching.status not in ("active", "waiting_reply", "timeout_warning"):
         return
 
     dialogues_remote = agent_cfg.get("dialogues_remote", "")
@@ -325,6 +325,7 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
             if not dry_run:
                 transport.send_reply(confirm_msg, outbox_remote, f"babysit_{ts}_confirm.txt")
             teaching.status = "timeout_warning"
+            teaching.last_sent_ts = float(ts)
             teaching.timeout_warning_ts = float(ts)
             _save_teaching_state(base_dir, ts_file, teaching, dry_run)
             append_log(base_dir / LOG_FILE, f"[{agent_name}] teaching loop: 逾時確認訊息已送")

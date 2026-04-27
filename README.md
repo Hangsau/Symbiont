@@ -194,7 +194,8 @@ Symbiont/
 │   └── utils/
 │       ├── session_reader.py  # Parse .jsonl Claude Code session logs
 │       ├── claude_runner.py   # claude -p subprocess wrapper (cross-platform)
-│       └── file_ops.py        # Atomic writes, file locking, safe read/append
+│       ├── file_ops.py        # Atomic writes, file locking, safe read/append
+│       └── transport.py       # Agent communication: SSH/SCP + local file I/O
 ├── setup/
 │   ├── setup_windows.bat      # Install: pip + Task Scheduler + Stop hook
 │   ├── setup_mac.sh           # Install: pip + launchd + Stop hook

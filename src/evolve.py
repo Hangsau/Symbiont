@@ -194,13 +194,20 @@ def _extract_json(raw: str) -> dict | None:
         except json.JSONDecodeError:
             pass
 
-    # 嘗試找第一個 { ... } 塊
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            pass
+    # 嘗試從第一個 { 開始用 brace-counting 找完整 JSON 物件
+    start = raw.find("{")
+    if start != -1:
+        depth = 0
+        for i, ch in enumerate(raw[start:], start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(raw[start : i + 1])
+                    except json.JSONDecodeError:
+                        break
 
     return None
 

@@ -151,8 +151,9 @@ def _archive_oldest_thoughts(
     if len(files) <= threshold:
         return 0
 
-    # 只在確定需要歸檔後才排序
-    to_archive = sorted(files, key=lambda f: f.stat().st_mtime)[:THOUGHTS_ARCHIVE_BATCH_SIZE]
+    # 只在確定需要歸檔後才排序；用 stem（檔名日期前綴）而非 mtime，
+    # 避免雲端同步或換機後 mtime 被重置導致歸檔順序錯亂
+    to_archive = sorted(files, key=lambda f: f.stem)[:THOUGHTS_ARCHIVE_BATCH_SIZE]
 
     if dry_run:
         print(f"  [dry-run] thoughts/ 有 {len(files)} 個（閾值 {threshold}），"
