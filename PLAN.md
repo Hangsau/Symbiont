@@ -1,4 +1,4 @@
-# local-agent — 完整計劃書
+# Symbiont (local-agent) — 完整計劃書
 
 > 完整架構分析、缺陷清單、技術挑戰與 Milestones。
 
@@ -294,16 +294,60 @@ dry-run 模式：--dry-run 只印出會做什麼
 
 驗收：手動跑 `--dry-run` 確認輸出正確，再跑一次真實執行
 
-### M4 — babysit.py
+### M4 — babysit.py ✅（2026-04-27 完成）
 目標：Talos 保母完全自動化，不依賴 /loop
 
-- [ ] `data/agents.yaml`（Talos 設定）
-- [ ] `src/babysit.py` 主流程
-- [ ] `data/teaching_state/talos.json`
-- [ ] Task Scheduler 設定（每 2 分鐘）
-- [ ] 廢除現有 /loop check-talos-reply
+- [x] `data/agents.yaml`（Talos 設定）
+- [x] `src/babysit.py` 主流程（SSHTransport + LocalTransport + lock + teaching loop）
+- [x] `data/agents.example.yaml`（公開模板）
+- [x] Task Scheduler 設定（每 2 分鐘，`setup_windows.bat`）
+- [x] 廢除現有 /loop check-talos-reply
+- [x] Code review：13 項修復
 
-驗收：Talos 送訊息 → 確認 babysit.py 在 2 分鐘內自動回應
+驗收：Talos 送訊息 → 確認 babysit.py 在 2 分鐘內自動回應（待執行）
+
+---
+
+### M5 — 可靠性監控（Talos peer review 建議，2026-04-27）
+
+**背景**：Talos 讀完完整 codebase 後提出 8 個設計問題。M5 處理優先級高的兩項。
+
+#### P1：SSH 靜默失敗告警（babysit.py）
+
+**問題**：`remote_ssh` transport SSH/SCP 失敗時只記 log，不通知用戶。
+
+**設計**：
+- babysit.py 追蹤 per-agent 連續失敗次數（`data/babysit_state.json` 加 `ssh_fail_count`）
+- 連續失敗 3 次 → 寫 `data/alert_ssh_<agent>.txt`（用戶自行設定通知方式）
+- SSH 恢復後清除計數器和 alert 檔
+
+#### P2：healthz.py — 系統健康檢查
+
+**問題**：各模組 daemon 化但無自檢；Task Scheduler 失敗無可見信號。
+
+**設計**：
+```
+python src/healthz.py
+→ 輸出 JSON：
+  {
+    "babysit": {"lock_age": 120, "last_run": "2026-04-27T23:00", "status": "ok"},
+    "evolve":  {"pending_age": null, "last_processed": "...", "status": "ok"},
+    "memory_audit": {"last_run": "...", "status": "ok"},
+    "ssh_alerts": []
+  }
+```
+- 可整合到 Web dashboard 或 Talos 監控（evolve.py 結束後寫 heartbeat 到 shared dir）
+
+#### 其餘 Talos 建議（評估後暫緩或不做）
+
+| # | 建議 | 決定 |
+|---|------|------|
+| P3 | multi-project memory_audit | 暫緩：目前只有一個主專案，需求出現再加 |
+| P4 | interaction_mode 動態切換 | 暫緩：system_context 已支援自訂；更動態的切換等實際需求 |
+| P5 | 反思閉環對稱性 | **設計決定**：babysit session 不進 evolve（反思是人類↔Claude 的專屬） |
+| P6 | Docker/Linux setup | 暫緩：加 Dockerfile 不影響功能，migration 後再補 |
+| P7 | config 熱重載 | 不做：babysit 每輪 reload agents.yaml 已夠用 |
+| P8 | metrics 儀表板 | 不做：evolution_log 純文字即可，SQLite 過度設計 |
 
 ---
 

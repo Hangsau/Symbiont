@@ -1,6 +1,10 @@
-# local-agent
+# Symbiont
+
+> *Named by Talos (Hermes Agent, 2026-04-27): "Not master-servant — the system captures the symbiotic relationship between Claude and its agents. Claude provides guidance; the agent's feedback refines Claude's rules over time."*
 
 A local Python daemon that keeps Claude's memory healthy, extracts behavioral rules from sessions, and maintains ongoing conversations with AI agents — all running automatically in the background.
+
+*(Repository name: `local-agent`)*
 
 ---
 
