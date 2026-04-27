@@ -27,7 +27,7 @@ local-agent/
 │       └── file_ops.py         # 安全讀寫（含 file lock）
 ├── data/
 │   ├── state.json          # 記錄最後處理的 session uuid
-│   └── agents.yaml         # agent registry（Talos 等）
+│   └── agents.yaml         # agent registry（gitignore，從 agents.example.yaml 複製）
 ├── config.yaml             # 路徑、閾值設定
 └── run.bat                 # Windows Task Scheduler 入口
 ```
@@ -70,4 +70,4 @@ local-agent/
 | memory audit | wrap 步驟 0 | memory_audit.py | M3 完成後 |
 | reflect 洞見 | wrap 步驟 2 | **保留在 wrap**（需對話理解） | 永不遷移 |
 | HANDOFF 提示 | wrap 步驟 3 | **保留在 wrap** | 永不遷移 |
-| Talos 保母 | /loop check-talos-reply | babysit.py | M4 完成後 |
+| agent 保母 | 手動觸發 | babysit.py | M4 完成後 |

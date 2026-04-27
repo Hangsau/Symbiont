@@ -1,4 +1,5 @@
 # Runtime state — 不進版本控制
+HANDOFF.md
 data/*.log
 data/*.txt
 data/state.json

@@ -48,13 +48,16 @@ paths:
 
   # ── evolution_log（留空 = 自動建立在 data/ 下）───────────────
   # 已有歷史記錄的用戶：填入現有路徑以保留連續性
-  # 範例：~/claudehome/projects/evolve/evolution_log.md
-  evolution_log: "C:/claudehome/projects/evolve/evolution_log.md"
+  # 範例 Windows："C:/Users/xxx/my-project/evolution_log.md"
+  # 範例 Mac：    "~/my-project/evolution_log.md"
+  evolution_log: ""
 
   # ── claude CLI ────────────────────────────────────────────────
   # 通常 "claude" 即可（setup script 確保 PATH 正確）
   # Task Scheduler 環境若找不到，改為絕對路徑
-  claude_cli: "C:/Users/user/AppData/Roaming/npm/claude.cmd"
+  # 範例 Windows：C:/Users/<username>/AppData/Roaming/npm/claude.cmd
+  # 範例 Mac：    /usr/local/bin/claude
+  claude_cli: "claude"
 
   # ── 備份目標（選填，留空則跳過備份）─────────────────────────
   # 範例 Windows：~/Desktop/backup-claude

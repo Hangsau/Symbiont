@@ -8,7 +8,7 @@
 #   local       — 本地目錄讀寫（同機器上的 agent）
 
 agents:
-  # 範例：遠端 VM 上的 agent（如 Hermes/Talos）
+  # 範例：遠端 VM 上的 agent
   my_agent:
     enabled: false
     type: remote_ssh
@@ -17,9 +17,9 @@ agents:
     ssh_host: "user@your-vm-ip"
 
     # Agent 的訊息目錄（VM 上的路徑）
-    inbox_remote: "~/.hermes/for-claude/"         # Agent → Claude（babysit 讀取）
-    outbox_remote: "~/.hermes/claude-inbox/"       # Claude → Agent（babysit 寫入）
-    dialogues_remote: "~/.hermes/claude-dialogues/" # 對話存檔（teaching loop 讀取）
+    inbox_remote: "~/.your-agent/for-claude/"         # Agent → Claude（babysit 讀取）
+    outbox_remote: "~/.your-agent/claude-inbox/"       # Claude → Agent（babysit 寫入）
+    dialogues_remote: "~/.your-agent/claude-dialogues/" # 對話存檔（teaching loop 讀取）
 
     teaching_state_file: "data/teaching_state/my_agent.json"
     cooldown_seconds: 600  # 兩次回應的最短間隔（秒）

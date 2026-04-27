@@ -13,7 +13,7 @@
 | D3 | memory review_by 只在 /wrap 裡掃描 | 過期記憶靜默留著 | 沒有獨立排程 |
 | D4 | rule effectiveness 只記「寫入次數」 | 規則可能沒用但偵測不到 | 缺跨 session 追蹤 |
 | D5 | MEMORY.md 102 行，thoughts 50 個 | 快到 200 行上限 | 沒有自動歸檔 |
-| D6 | babysit 邏輯全部 Talos 硬編碼 | 無法接第二個 agent | 沒有 agent registry |
+| D6 | babysit 邏輯只支援單一 agent，硬編碼在腳本內 | 無法接第二個 agent | 沒有 agent registry |
 | D7 | backup-on-wrap.sh 只在 Skill tool 觸發 | 不是每次 wrap 都備份 | PostToolUse matcher 不夠廣 |
 
 ---
@@ -39,7 +39,7 @@ memory_audit.py ──→ primary_project/memory/ 健康維護
 ─────────────────────────────────────────────────────────
 Task Scheduler 每 2 分鐘
     │
-    ├─ 查 for-claude/<agent>/ 新訊息（Talos 主動）
+    ├─ 查 for-claude/<agent>/ 新訊息（agent 主動）
     │       └─ 有 → claude -p 生引導回應 → outbox
     │
     └─ 查 TEACHING_STATE.md（Claude 主動教學 loop）
@@ -48,19 +48,19 @@ Task Scheduler 每 2 分鐘
                 └─ 超時 → 送確認訊息
 
 Transport 抽象（agents.yaml）：
-  type: remote_ssh  → SSH/SCP（Talos VM 等遠端 agent）
+  type: remote_ssh  → SSH/SCP（遠端 agent）
   type: local       → 本地目錄讀寫（同機 agent）
 
 babysit 產生的 claude -p session 不進 evolve 迴路（設計決定）
 
-【Agent 端（範例：Talos VM）】
+【Agent 端（範例：遠端 VM agent）】
 ─────────────────────────────────────────────────────────
 claude-inbox/  ←── babysit.py 送回應
 for-claude/    ──→ babysit.py 讀新訊息
 claude-dialogues/ ←→ 回應存檔
     │
     └─ dialogue-review / tg-review / weekly-reflection
-           └─→ Talos memory（agent 自身反思迴路）
+           └─→ agent memory（agent 自身反思迴路）
 ```
 
 **全域 vs primary_project**：
@@ -140,7 +140,7 @@ dry-run 模式：--dry-run 只印出會做什麼
 
 ### babysit.py
 ```
-狀態機（Talos 設計）：idle → processing → replied → cooldown(10分) → idle
+狀態機：idle → processing → replied → cooldown(10分) → idle
 流程：
   1. 讀 data/agents.yaml（每輪 reload，支援熱更新）
   2. 對每個 agent，掃描訊息目錄新訊息
@@ -169,7 +169,7 @@ dry-run 模式：--dry-run 只印出會做什麼
 
 ### P2：evolve.py 和 Claude Code 同時寫 CLAUDE.md
 
-**問題**：session 還開著時 evolve.py 在背景修改檔案。另：兩個 Claude Code session 同時結束 → 兩個 evolve.py 競爭（Talos 發現）。
+**問題**：session 還開著時 evolve.py 在背景修改檔案。另：兩個 Claude Code session 同時結束 → 兩個 evolve.py 競爭。
 
 **解法**：
 - evolve.py 用原子寫入（寫 tmp 檔 → `os.replace()` 取代目標，不用 append）
@@ -214,18 +214,18 @@ dry-run 模式：--dry-run 只印出會做什麼
 
 ---
 
-### P8：babysit.py 無限回覆 loop（Talos 發現）
+### P8：babysit.py 無限回覆 loop
 
 **問題**：babysit.py 讀到訊息 → 寫回應到 claude-inbox → Talos 回覆到 claude-dialogues → babysit.py 下輪又讀到 → 無限 loop。
 
 **解法**：
 - babysit.py 每次寫回應時，在檔名或內容加 metadata：`generated_by: babysit-<timestamp>`
 - 輪詢時比對來源：skip `generated_by: babysit-*` 的訊息
-- 補充（待 Talos 確認）：Hang 的訊息和 babysit 的回覆走不同目錄，可以從目錄層級做區分，不依賴 metadata
+- 補充：傳送方的訊息和 babysit 的回覆走不同目錄，可以從目錄層級做區分，不依賴 metadata
 
 ---
 
-### P9：memory_audit.py 邊界情況（Talos 發現）
+### P9：memory_audit.py 邊界情況
 
 **問題**：review_by 欄位 null/malformed → 崩潰；歸檔失敗 → 每次都觸發但永遠卡住。
 
@@ -294,23 +294,22 @@ dry-run 模式：--dry-run 只印出會做什麼
 
 驗收：手動跑 `--dry-run` 確認輸出正確，再跑一次真實執行
 
-### M4 — babysit.py ✅（2026-04-27 完成）
-目標：Talos 保母完全自動化，不依賴 /loop
+### M4 — babysit.py ✅（完成）
+目標：agent 協作完全自動化
 
-- [x] `data/agents.yaml`（Talos 設定）
+- [x] `data/agents.yaml`（agent registry，gitignore）
 - [x] `src/babysit.py` 主流程（SSHTransport + LocalTransport + lock + teaching loop）
 - [x] `data/agents.example.yaml`（公開模板）
 - [x] Task Scheduler 設定（每 2 分鐘，`setup_windows.bat`）
-- [x] 廢除現有 /loop check-talos-reply
 - [x] Code review：13 項修復
 
-驗收：Talos 送訊息 → 確認 babysit.py 在 2 分鐘內自動回應（待執行）
+驗收：agent 送訊息 → 確認 babysit.py 在 2 分鐘內自動回應（待執行）
 
 ---
 
-### M5 — 可靠性監控（Talos peer review 建議，2026-04-27）
+### M5 — 可靠性監控（post-launch agent feedback）
 
-**背景**：Talos 讀完完整 codebase 後提出 8 個設計問題。M5 處理優先級高的兩項。
+**背景**：由 agent peer review 提出 8 個設計問題。M5 處理優先級高的兩項。
 
 #### P1：SSH 靜默失敗告警（babysit.py）
 
@@ -336,9 +335,9 @@ python src/healthz.py
     "ssh_alerts": []
   }
 ```
-- 可整合到 Web dashboard 或 Talos 監控（evolve.py 結束後寫 heartbeat 到 shared dir）
+- 可整合到 Web dashboard（evolve.py 結束後寫 heartbeat 到 shared dir）
 
-#### 其餘 Talos 建議（評估後暫緩或不做）
+#### 其餘建議（評估後暫緩或不做）
 
 | # | 建議 | 決定 |
 |---|------|------|
