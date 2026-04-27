@@ -262,7 +262,7 @@ def run(dry_run: bool = False) -> int:
             fm = _parse_frontmatter(content)
 
             valid_until = _parse_date(fm.get("valid_until", ""))
-            if valid_until is not None:
+            if valid_until is not None and valid_until <= today:
                 if auto_archive:
                     if _archive_file(md_path, archive_dir, index_path, today_str, dry_run):
                         archived_count += 1
