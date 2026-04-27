@@ -155,7 +155,7 @@ type: local        # Same-machine agents (file I/O)
 
 ```bash
 # Clone the repo
-git clone https://github.com/Hangsau/local-agent
+git clone https://github.com/Hangsau/Symbiont
 cd local-agent
 
 # Windows
