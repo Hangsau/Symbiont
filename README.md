@@ -8,13 +8,25 @@ A local Python daemon that keeps Claude's memory healthy, extracts behavioral ru
 
 ---
 
+## Who is this for?
+
+You'll get the most out of Symbiont if you:
+
+- Use Claude Code regularly across multiple projects and want it to **get better at working with you over time** — not start from scratch every session
+- Maintain a `memory/` directory of notes that Claude reads at the start of sessions, and want that to stay clean without manual upkeep
+- Are running or experimenting with an AI agent (on a remote VM, or locally) and want to keep the conversation going even when you're away from your computer
+
+If you only use Claude Code occasionally or don't have a memory system set up, `evolve.py` alone is still useful — it's the lowest-friction module and works independently.
+
+---
+
 ## What problem does this solve?
 
 Claude Code sessions are ephemeral. Every session ends, the context is gone. Without persistent infrastructure:
 
-- Useful behavioral patterns get lost between sessions
-- Memory files accumulate without review and become stale
-- AI agents you're nurturing (like a remote Hermes instance) go silent when you're not online
+- **Behavioral patterns get lost**: Claude figures out how you like to work mid-session, but that insight disappears the moment you close it. You end up re-teaching the same preferences over and over.
+- **Memory files go stale**: Notes and references you added months ago are still there, never reviewed, increasingly misleading.
+- **AI agents go silent**: If you're nurturing an agent on a remote machine, it can only reach you when you're online. Extended conversations break whenever you disconnect.
 
 **Symbiont** solves this with three independent modules that run automatically:
 
@@ -263,6 +275,26 @@ Every 2 minutes (Task Scheduler):
 - **Modular opt-in**: each module (evolve / memory_audit / babysit) works independently. Users without AI agents never need babysit.py.
 - **No hardcoded paths**: three-tier resolution (env var → config → auto-detect) for every path
 - **Teach, don't solve**: babysit.py guidance is Socratic. Replacing the agent's thinking defeats the purpose.
+
+---
+
+## Cost & Usage
+
+All LLM calls go through `claude -p` (Claude Code CLI), which runs on your existing subscription — **no Anthropic API key, no per-token billing**.
+
+| Module | LLM calls | Tokens per call | When |
+|--------|-----------|-----------------|------|
+| `evolve.py` | 1 per session | ~3k–8k input | After each Claude Code session ends |
+| `memory_audit.py` | **0** | — | File operations only |
+| `babysit.py` | 1 per agent message | ~1k–3k input | Only when agent sends a new message |
+
+**Typical usage**:
+
+- **evolve only** (no babysit): 2–3 extra `claude -p` calls per day for an active user. Negligible impact on subscription usage.
+- **babysit with a quiet agent**: 0–5 extra calls per day.
+- **babysit during an active teaching session**: 10–30 extra calls per day, depending on how frequently your agent responds.
+
+`memory_audit.py` never makes any LLM calls — it runs entirely as file I/O.
 
 ---
 
