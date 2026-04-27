@@ -1,13 +1,13 @@
 @echo off
 REM setup_memory.bat — 初始化 Claude memory 系統骨架（Windows）
 REM
-REM 此腳本由 Claude 代為執行，或手動在 local-agent 目錄下執行
+REM 此腳本由 Claude 代為執行，或手動在 Symbiont 目錄下執行
 REM 會在 Claude Code 的主專案下建立 memory/ 目錄結構
 
 setlocal EnableDelayedExpansion
 
 echo ============================================================
-echo  local-agent memory 系統初始化
+echo  Symbiont memory 系統初始化
 echo ============================================================
 echo.
 
@@ -31,7 +31,7 @@ for /f "delims=" %%i in ('python "%FIND_PATH_PY%" 2^>nul') do set "MEMORY_DIR=%%
 del "%FIND_PATH_PY%" >nul 2>&1
 
 if "%MEMORY_DIR%"=="" (
-    echo [錯誤] 無法解析 memory 路徑，請確認 Python 已安裝且 local-agent 安裝完成
+    echo [錯誤] 無法解析 memory 路徑，請確認 Python 已安裝且 Symbiont 安裝完成
     pause
     exit /b 1
 )
@@ -51,14 +51,14 @@ if not exist "%MEMORY_DIR%\MEMORY.md" (
         echo # Memory Index
         echo.
         echo ^<!-- 每行格式：- [標題](檔名.md^) — 一行描述 ^-->
-        echo ^<!-- local-agent memory_audit.py 自動維護此索引 ^-->
+        echo ^<!-- Symbiont memory_audit.py 自動維護此索引 ^-->
     )
     echo [2/3] MEMORY.md 已建立
 ) else (
     echo [2/3] MEMORY.md 已存在，略過
 )
 
-REM ── 複製 SCHEMA.md（從 local-agent 模板）────────────────────────
+REM ── 複製 SCHEMA.md（從 Symbiont 模板）────────────────────────
 set "SCHEMA_SRC=%AGENT_DIR%\docs\MEMORY_SCHEMA.md"
 set "SCHEMA_DEST=%MEMORY_DIR%\SCHEMA.md"
 

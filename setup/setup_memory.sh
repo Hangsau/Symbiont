@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # setup_memory.sh — 初始化 Claude memory 系統骨架（Mac/Linux）
 #
-# 此腳本由 Claude 代為執行，或手動在 local-agent 目錄下執行
+# 此腳本由 Claude 代為執行，或手動在 Symbiont 目錄下執行
 # 會在 Claude Code 的主專案下建立 memory/ 目錄結構
 
 set -euo pipefail
@@ -9,7 +9,7 @@ set -euo pipefail
 AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "============================================================"
-echo " local-agent memory 系統初始化"
+echo " Symbiont memory 系統初始化"
 echo "============================================================"
 echo
 
@@ -23,7 +23,7 @@ print(get_path(cfg, 'memory_dir'))
 " 2>/dev/null)"
 
 if [ -z "$MEMORY_DIR" ]; then
-    echo "[錯誤] 無法解析 memory 路徑，請確認 Python 已安裝且 local-agent 安裝完成"
+    echo "[錯誤] 無法解析 memory 路徑，請確認 Python 已安裝且 Symbiont 安裝完成"
     exit 1
 fi
 
@@ -42,14 +42,14 @@ if [ ! -f "$MEMORY_DIR/MEMORY.md" ]; then
 # Memory Index
 
 <!-- 每行格式：- [標題](檔名.md) — 一行描述 -->
-<!-- local-agent memory_audit.py 自動維護此索引 -->
+<!-- Symbiont memory_audit.py 自動維護此索引 -->
 EOF
     echo "[2/3] MEMORY.md 已建立"
 else
     echo "[2/3] MEMORY.md 已存在，略過"
 fi
 
-# ── 複製 SCHEMA.md（從 local-agent 模板）───────────────────────
+# ── 複製 SCHEMA.md（從 Symbiont 模板）───────────────────────
 SCHEMA_SRC="$AGENT_DIR/docs/MEMORY_SCHEMA.md"
 SCHEMA_DEST="$MEMORY_DIR/SCHEMA.md"
 

@@ -1,7 +1,7 @@
-# local-agent 設定檔
+# Symbiont 設定檔
 # 路徑設計原則：
 #   - 使用 ~ 展開（跨平台），不寫死絕對路徑
-#   - local-agent 自身資料用相對路徑（相對於專案根目錄）
+#   - Symbiont 自身資料用相對路徑（相對於專案根目錄）
 #   - 機器差異只在此檔調整，程式碼不寫死任何路徑
 
 paths:
@@ -35,10 +35,10 @@ paths:
 
   # ── wrap 完成旗標 ──────────────────────────────────────────────
   # wrap skill 完成後寫入此固定路徑，evolve.py --skip-if-wrap-done 讀取
-  # 固定在 ~/.claude/ 確保 wrap skill 和 local-agent 雙方都能直接存取
+  # 固定在 ~/.claude/ 確保 wrap skill 和 Symbiont 雙方都能直接存取
   wrap_done_file: "~/.claude/.wrap_done.txt"
 
-  # ── local-agent 自身資料（相對於專案根目錄）─────────────────
+  # ── Symbiont 自身資料（相對於專案根目錄）─────────────────
   data_dir: "data"
   state_file: "data/state.json"
   pending_evolve: "data/pending_evolve.txt"

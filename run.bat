@@ -1,5 +1,5 @@
 @echo off
-:: local-agent Windows 入口腳本
+:: Symbiont Windows 入口腳本
 :: 用途：Task Scheduler 呼叫 / 手動執行
 ::
 :: 用法：
@@ -8,9 +8,9 @@
 ::   run.bat babysit
 ::
 :: Task Scheduler 範例（開機補跑 evolve）：
-::   Action: C:\claudehome\projects\local-agent\run.bat
+::   Action: C:\claudehome\projects\Symbiont\run.bat
 ::   Arguments: evolve
-::   Start in: C:\claudehome\projects\local-agent
+::   Start in: C:\claudehome\projects\Symbiont
 
 :: ── 確保 claude CLI 在 PATH ────────────────────────────────────
 :: 優先找 npm global（winget/npm 安裝路徑）

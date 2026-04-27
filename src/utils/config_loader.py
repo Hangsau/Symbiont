@@ -36,7 +36,7 @@ def _find_config() -> Path:
         p = d / "config.yaml"
         if p.exists():
             return p
-    raise FileNotFoundError("config.yaml not found. Expected at local-agent root.")
+    raise FileNotFoundError("config.yaml not found. Expected at Symbiont root.")
 
 
 def load_config(config_path: str | None = None) -> dict:

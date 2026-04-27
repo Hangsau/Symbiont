@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# local-agent Mac/Linux 入口腳本
+# Symbiont Mac/Linux 入口腳本
 # 用途：launchd / cron 呼叫 / 手動執行
 #
 # 用法：
@@ -8,7 +8,7 @@
 #   ./run.sh babysit
 #
 # launchd plist 範例（每天 02:00 memory_audit）：
-#   ProgramArguments: ["/Users/xxx/claudehome/projects/local-agent/run.sh", "memory_audit"]
+#   ProgramArguments: ["/Users/xxx/claudehome/projects/Symbiont/run.sh", "memory_audit"]
 #   StartCalendarInterval: {Hour: 2, Minute: 0}
 
 set -euo pipefail

@@ -1,4 +1,4 @@
-# Symbiont (local-agent) — 完整計劃書
+# Symbiont (Symbiont) — 完整計劃書
 
 > 完整架構分析、缺陷清單、技術挑戰與 Milestones。
 
@@ -368,7 +368,7 @@ Python 程式碼完全共用，差異只在部署腳本：
 1. 刪 Task Scheduler 任務 / launchd plist
 2. 移除 `~/.claude/settings.json` 裡的 Stop hook
 3. 刪 `~/.claude/.wrap_done.txt`（若存在）
-4. 提示手動刪除 local-agent 資料夾（腳本無法刪自己所在目錄）
+4. 提示手動刪除 Symbiont 資料夾（腳本無法刪自己所在目錄）
 
 ---
 
@@ -386,6 +386,6 @@ Python 程式碼完全共用，差異只在部署腳本：
 
 | # | 限制 | 影響 | 說明 |
 |---|------|------|------|
-| L1 | 結構假設 | 中 | local-agent 必須在 `{workdir}/projects/local-agent/` 以外的安裝位置需手動設 config |
+| L1 | 結構假設 | 中 | Symbiont 必須在 `{workdir}/projects/Symbiont/` 以外的安裝位置需手動設 config |
 | L2 | wrap skill 配合 | 低 | `--skip-if-wrap-done` 依賴 wrap skill 寫 `~/.claude/.wrap_done.txt`；不配合時旗標永遠不觸發 |
 | L3 | 既有 evolution_log | 低 | 已有歷史記錄的用戶需在 config.yaml 設覆蓋路徑，否則從新位置重開 |

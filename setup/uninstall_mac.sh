@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# uninstall_mac.sh — 移除 local-agent（macOS）
-# 執行完畢後，請手動刪除 local-agent 資料夾本身
+# uninstall_mac.sh — 移除 Symbiont（macOS）
+# 執行完畢後，請手動刪除 Symbiont 資料夾本身
 
 set -euo pipefail
 
@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "============================================================"
-echo " local-agent 移除程式"
+echo " Symbiont 移除程式"
 echo "============================================================"
 echo
 
@@ -17,9 +17,9 @@ echo "[1/3] 移除 launchd 排程..."
 
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLISTS=(
-    "com.local-agent.evolve.plist"
-    "com.local-agent.memory-audit.plist"
-    "com.local-agent.babysit.plist"
+    "com.symbiont.evolve.plist"
+    "com.symbiont.memory-audit.plist"
+    "com.symbiont.babysit.plist"
 )
 
 for plist in "${PLISTS[@]}"; do
@@ -37,8 +37,6 @@ done
 echo
 echo "[2/3] 移除 Stop hook from ~/.claude/settings.json..."
 
-SETTINGS="$HOME/.claude/settings.json"
-
 python3 - <<'PYEOF'
 import json, sys, pathlib, os
 
@@ -51,7 +49,7 @@ cfg = json.loads(p.read_text(encoding="utf-8"))
 hooks = cfg.get("hooks", {})
 stop_hooks = hooks.get("Stop", [])
 before = len(stop_hooks)
-stop_hooks = [h for h in stop_hooks if "evolve" not in str(h) and "local-agent" not in str(h)]
+stop_hooks = [h for h in stop_hooks if "evolve" not in str(h) and "symbiont" not in str(h)]
 removed = before - len(stop_hooks)
 if removed:
     hooks["Stop"] = stop_hooks
@@ -59,7 +57,7 @@ if removed:
     p.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"      已移除 {removed} 個 hook")
 else:
-    print("      無 local-agent hook，略過")
+    print("      無 Symbiont hook，略過")
 PYEOF
 
 # ── 3. 刪除 wrap_done_file ───────────────────────────────────
@@ -77,7 +75,7 @@ fi
 # ── 完成 ─────────────────────────────────────────────────────
 echo
 echo "============================================================"
-echo " 完成！請手動刪除 local-agent 資料夾："
+echo " 完成！請手動刪除 Symbiont 資料夾："
 echo " $AGENT_DIR"
 echo "============================================================"
 echo

@@ -1,4 +1,4 @@
-# local-agent 操作手冊
+# Symbiont 操作手冊
 
 > 本文件供 Claude 閱讀執行。用戶只需告訴 Claude 要做什麼，Claude 會根據此文件操作。
 
@@ -6,10 +6,10 @@
 
 ## 初始安裝
 
-**用戶說**：「幫我安裝 local-agent」或「設定 local-agent，repo 在 [路徑]」
+**用戶說**：「幫我安裝 Symbiont」或「設定 Symbiont，repo 在 [路徑]」
 
 **Claude 執行**：
-1. 確認路徑下有 `config.yaml`（確認是 local-agent repo）
+1. 確認路徑下有 `config.yaml`（確認是 Symbiont repo）
 2. 執行 `setup/setup_windows.bat`（Windows）或 `setup/setup_mac.sh`（Mac）
 3. 驗證：`python src/evolve.py --dry-run` 能正常執行
 
@@ -24,8 +24,8 @@
 2. 確認 `data/agents.yaml` 的 agent 設定正確（ssh_key、ssh_host、inbox_remote 等）
 3. 設定 Task Scheduler：
    ```bash
-   schtasks /Create /TN "local-agent-babysit" \
-     /TR "cmd /c cd /d \"[local-agent路徑]\" & python src\babysit.py" \
+   schtasks /Create /TN "Symbiont-babysit" \
+     /TR "cmd /c cd /d \"[Symbiont路徑]\" & python src\babysit.py" \
      /SC MINUTE /MO 2 /F
    ```
 4. 驗證：`python src/babysit.py --dry-run`
@@ -41,7 +41,7 @@
 
 **Claude 執行**：
 ```bash
-schtasks /Delete /TN "local-agent-babysit" /F
+schtasks /Delete /TN "Symbiont-babysit" /F
 ```
 
 ---
@@ -52,7 +52,7 @@ schtasks /Delete /TN "local-agent-babysit" /F
 
 **Claude 執行**：
 ```bash
-cd [local-agent 路徑]
+cd [Symbiont 路徑]
 python src/babysit.py --dry-run   # 先預覽
 python src/babysit.py             # 確認後真實執行
 ```
@@ -102,12 +102,12 @@ python src/babysit.py             # 確認後真實執行
 
 ---
 
-## 換機遷移 local-agent
+## 換機遷移 Symbiont
 
-**用戶說**：「我換電腦了，幫我遷移 local-agent」
+**用戶說**：「我換電腦了，幫我遷移 Symbiont」
 
 **Claude 執行**：
-1. 複製整個 local-agent 目錄到新機
+1. 複製整個 Symbiont 目錄到新機
 2. 確認 SSH key 存在：`~/.ssh/id_ed25519`（若無，需從舊機複製或重新生成並部署公鑰到 VM）
 3. 確認 claude CLI 已登入：`claude --version`
 4. 執行 `setup/setup_windows.bat` 重設 Task Scheduler + Stop hook
@@ -117,7 +117,7 @@ python src/babysit.py             # 確認後真實執行
 
 ## 啟用 memory 系統
 
-**用戶說**：「幫我啟用 memory 系統」或「啟用 local-agent memory」
+**用戶說**：「幫我啟用 memory 系統」或「啟用 Symbiont memory」
 
 **Claude 執行**：
 1. 執行 `setup/setup_memory.bat`（Windows）或 `setup/setup_memory.sh`（Mac）
@@ -151,7 +151,7 @@ python src/babysit.py             # 確認後真實執行
 
 **Claude 執行**：
 ```bash
-cd [local-agent 路徑]
+cd [Symbiont 路徑]
 python src/memory_audit.py --dry-run   # 先預覽
 python src/memory_audit.py             # 確認後真實執行
 ```
@@ -164,31 +164,31 @@ python src/memory_audit.py             # 確認後真實執行
 
 **Claude 執行**：
 ```bash
-cd [local-agent 路徑]
+cd [Symbiont 路徑]
 python src/evolve.py --dry-run   # 先預覽
 python src/evolve.py             # 確認後真實執行
 ```
 
 ---
 
-## 移除 local-agent
+## 移除 Symbiont
 
-**用戶說**：「幫我移除 local-agent」或「卸載 local-agent」
+**用戶說**：「幫我移除 Symbiont」或「卸載 Symbiont」
 
 **Claude 執行**：
 1. 刪除 Task Scheduler 任務：
    ```bash
-   schtasks /Delete /TN "local-agent-evolve" /F
-   schtasks /Delete /TN "local-agent-memory-audit" /F
+   schtasks /Delete /TN "Symbiont-evolve" /F
+   schtasks /Delete /TN "Symbiont-memory-audit" /F
    ```
-2. 從 `~/.claude/settings.json` 的 `hooks.Stop` 陣列移除含 `local-agent-stop-hook` 的條目
+2. 從 `~/.claude/settings.json` 的 `hooks.Stop` 陣列移除含 `Symbiont-stop-hook` 的條目
 3. 刪除旗標檔：
    ```bash
    rm -f ~/.claude/.wrap_done.txt
-   rm -f [local-agent路徑]/data/pending_evolve.txt
-   rm -f [local-agent路徑]/data/pending_audit.txt
+   rm -f [Symbiont路徑]/data/pending_evolve.txt
+   rm -f [Symbiont路徑]/data/pending_audit.txt
    ```
-4. 提示用戶手動刪除 local-agent 資料夾（Claude 無法刪除自己正在讀取的目錄）
+4. 提示用戶手動刪除 Symbiont 資料夾（Claude 無法刪除自己正在讀取的目錄）
 
 ---
 
@@ -203,7 +203,7 @@ python src/evolve.py             # 確認後真實執行
 
 ## 設定主專案路徑
 
-**用戶說**：「local-agent 的主專案設成 [路徑]」
+**用戶說**：「Symbiont 的主專案設成 [路徑]」
 
 **Claude 執行**：
 - 編輯 `config.yaml`，將 `paths.primary_project` 改為指定路徑
@@ -213,7 +213,7 @@ python src/evolve.py             # 確認後真實執行
 
 ## 設定 claude CLI 路徑
 
-**用戶說**：「local-agent 找不到 claude」或 `evolve.py` 報 "claude CLI not found"
+**用戶說**：「Symbiont 找不到 claude」或 `evolve.py` 報 "claude CLI not found"
 
 **Claude 執行**：
 
@@ -267,7 +267,7 @@ cat data/pending_evolve.txt   # 若存在表示上次沒跑完
 
 ```bash
 # Windows：確認任務存在
-schtasks /Query /TN "local-agent-evolve"
+schtasks /Query /TN "Symbiont-evolve"
 
 # 若不存在，重跑安裝
 setup/setup_windows.bat
@@ -277,8 +277,8 @@ setup/setup_windows.bat
 
 ## 注意事項（Claude 閱讀）
 
-- 所有路徑操作前，先確認 `config.yaml` 存在（確認在 local-agent 目錄下）
+- 所有路徑操作前，先確認 `config.yaml` 存在（確認在 Symbiont 目錄下）
 - 修改 `config.yaml` 後，用 `python src/evolve.py --dry-run` 驗證路徑解析正確
-- memory/ 目錄位置由 `primary_project` 設定決定，不是 local-agent 安裝位置
+- memory/ 目錄位置由 `primary_project` 設定決定，不是 Symbiont 安裝位置
 - `enabled: false` 時 memory_audit.py 會靜默跳過（不報錯）
 - Windows 上 `claude` 是 `.cmd` 批次檔，`claude_runner.py` 會自動處理；不需手動改用 node

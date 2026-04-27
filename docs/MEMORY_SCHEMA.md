@@ -24,7 +24,7 @@ superseded_by: null | 新版檔名.md
 | `description` | 是 | 一行摘要，MEMORY.md 索引用這行判斷要不要讀全文 |
 | `type` | 是 | 分類（見下） |
 | `created` | 是 | 首次建立日期 |
-| `valid_until` | 是 | `null` = 有效；日期 = 已失效，local-agent 會自動歸檔 |
+| `valid_until` | 是 | `null` = 有效；日期 = 已失效，Symbiont 會自動歸檔 |
 | `review_by` | 條件 | `project`/`reference` 類必填（建立後 90 天）；到期時 audit 會列出待確認 |
 | `superseded_by` | 是 | `null` = 無繼承者；填檔名 = 被哪個新記憶取代 |
 
@@ -48,7 +48,7 @@ superseded_by: null | 新版檔名.md
 ```
 
 - 只列 `valid_until: null` 的條目
-- 超過 170 行時 local-agent 會警告
+- 超過 170 行時 Symbiont 會警告
 
 ## Update 操作（禁止直接覆蓋）
 

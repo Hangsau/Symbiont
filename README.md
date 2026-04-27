@@ -16,7 +16,7 @@ Claude Code sessions are ephemeral. Every session ends, the context is gone. Wit
 - Memory files accumulate without review and become stale
 - AI agents you're nurturing (like a remote Hermes instance) go silent when you're not online
 
-**local-agent** solves this with three independent modules that run automatically:
+**Symbiont** solves this with three independent modules that run automatically:
 
 | Module | What it does |
 |--------|-------------|
@@ -30,7 +30,7 @@ Claude Code sessions are ephemeral. Every session ends, the context is gone. Wit
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    YOUR COMPUTER (local-agent)                    │
+│                    YOUR COMPUTER (Symbiont)                       │
 │                                                                   │
 │  Claude Code sessions  ──Stop hook──►  evolve.py                 │
 │  (~/.claude/projects/                  │                          │
@@ -156,7 +156,7 @@ type: local        # Same-machine agents (file I/O)
 ```bash
 # Clone the repo
 git clone https://github.com/Hangsau/Symbiont
-cd local-agent
+cd Symbiont
 
 # Windows
 setup/setup_windows.bat
@@ -172,7 +172,7 @@ The setup script:
 
 ### Enable memory audit (opt-in)
 
-Tell Claude: *"幫我啟用 local-agent 的 memory 系統"*  
+Tell Claude: *"幫我啟用 Symbiont 的 memory 系統"*  
 → Claude runs `setup/setup_memory.bat` and sets `memory_audit.enabled: true`
 
 ### Enable babysit
@@ -186,7 +186,7 @@ Tell Claude: *"幫我啟用 local-agent 的 memory 系統"*
 ## File Layout
 
 ```
-local-agent/
+Symbiont/
 ├── src/
 │   ├── evolve.py              # Session analysis → CLAUDE.md rules
 │   ├── memory_audit.py        # Daily memory health maintenance
@@ -239,7 +239,7 @@ On Windows, if `claude -p` fails from background processes, set `claude_cli` to 
 Claude Code session ends
         │
         ▼ (Stop hook, ~/.claude/settings.json)
-local-agent-stop-hook.sh
+symbiont-stop-hook.sh
         │
         ├── writes data/pending_evolve.txt (contains session ID)
         ├── writes data/pending_audit.txt

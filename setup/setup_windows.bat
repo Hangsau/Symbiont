@@ -1,13 +1,13 @@
 @echo off
-REM setup_windows.bat — 安裝 local-agent（Windows）
-REM 執行後 local-agent 會在每次 Claude Code session 結束時自動觸發
+REM setup_windows.bat — 安裝 Symbiont（Windows）
+REM 執行後 Symbiont 會在每次 Claude Code session 結束時自動觸發
 REM
 REM 需求：Python 3.10+、Claude Code CLI 已登入
-REM 用法：在 local-agent 目錄下執行，或告訴 Claude「幫我安裝 local-agent」
+REM 用法：在 Symbiont 目錄下執行，或告訴 Claude「幫我安裝 Symbiont」
 
 setlocal EnableDelayedExpansion
 
-REM ── 動態取得 local-agent 根目錄（不寫死路徑）────────────────────
+REM ── 動態取得 Symbiont 根目錄（不寫死路徑）────────────────────
 set "AGENT_DIR=%~dp0.."
 REM 移除結尾反斜線並解析絕對路徑
 pushd "%AGENT_DIR%"
@@ -15,7 +15,7 @@ set "AGENT_DIR=%CD%"
 popd
 
 echo ============================================================
-echo  local-agent 安裝程式
+echo  Symbiont 安裝程式
 echo  路徑：%AGENT_DIR%
 echo ============================================================
 echo.
@@ -35,14 +35,14 @@ echo.
 echo [2/4] 設定 Stop hook（~\.claude\settings.json）...
 
 set "SETTINGS=%USERPROFILE%\.claude\settings.json"
-set "HOOK_SCRIPT=%USERPROFILE%\.claude\scripts\local-agent-stop-hook.sh"
+set "HOOK_SCRIPT=%USERPROFILE%\.claude\scripts\symbiont-stop-hook.sh"
 REM 將 AGENT_DIR 寫入 hook 的環境變數，確保路徑正確
-set "ADD_HOOK_PY=%TEMP%\add_local_agent_hook.py"
+set "ADD_HOOK_PY=%TEMP%\add_symbiont_hook.py"
 
 > "%ADD_HOOK_PY%" (
     echo import json, pathlib, sys
     echo p = pathlib.Path(r"%SETTINGS%"^)
-    echo hook_cmd = r'LOCAL_AGENT_DIR=\"%AGENT_DIR:\=/%\" bash \"%USERPROFILE:\=/%/.claude/scripts/local-agent-stop-hook.sh\"'
+    echo hook_cmd = r'LOCAL_AGENT_DIR=\"%AGENT_DIR:\=/%\" bash \"%USERPROFILE:\=/%/.claude/scripts/symbiont-stop-hook.sh\"'
     echo if not p.exists(^):
     echo     cfg = {}
     echo else:
@@ -50,7 +50,7 @@ set "ADD_HOOK_PY=%TEMP%\add_local_agent_hook.py"
     echo hooks = cfg.setdefault("hooks", {^}^)
     echo stop_hooks = hooks.setdefault("Stop", []^)
     echo # 避免重複加入
-    echo already = any("local-agent-stop-hook" in str(h^) for h in stop_hooks^)
+    echo already = any("symbiont-stop-hook" in str(h^) for h in stop_hooks^)
     echo if already:
     echo     print("       Stop hook 已存在，略過")
     echo     sys.exit(0^)
@@ -70,43 +70,43 @@ echo [3/4] 設定 Task Scheduler...
 REM evolve 補跑：開機時若 pending_evolve.txt 存在才跑
 set "EVOLVE_CMD=cmd /c if exist \"%AGENT_DIR%\data\pending_evolve.txt\" (cd /d \"%AGENT_DIR%\" ^& python src\evolve.py)"
 
-schtasks /Query /TN "local-agent-evolve" >nul 2>&1
+schtasks /Query /TN "symbiont-evolve" >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
-    schtasks /Delete /TN "local-agent-evolve" /F >nul 2>&1
+    schtasks /Delete /TN "symbiont-evolve" /F >nul 2>&1
 )
-schtasks /Create /TN "local-agent-evolve" /TR "%EVOLVE_CMD%" /SC ONSTART /DELAY 0002:00 /F >nul
+schtasks /Create /TN "symbiont-evolve" /TR "%EVOLVE_CMD%" /SC ONSTART /DELAY 0002:00 /F >nul
 if %ERRORLEVEL% EQU 0 (
-    echo       local-agent-evolve 已設定（開機後 2 分鐘補跑）
+    echo       symbiont-evolve 已設定（開機後 2 分鐘補跑）
 ) else (
-    echo [警告] local-agent-evolve Task Scheduler 設定失敗（可手動執行）
+    echo [警告] symbiont-evolve Task Scheduler 設定失敗（可手動執行）
 )
 
 REM memory_audit 補跑：開機時若 pending_audit.txt 存在才跑
 set "AUDIT_CMD=cmd /c if exist \"%AGENT_DIR%\data\pending_audit.txt\" (cd /d \"%AGENT_DIR%\" ^& python src\memory_audit.py)"
 
-schtasks /Query /TN "local-agent-memory-audit" >nul 2>&1
+schtasks /Query /TN "symbiont-memory-audit" >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
-    schtasks /Delete /TN "local-agent-memory-audit" /F >nul 2>&1
+    schtasks /Delete /TN "symbiont-memory-audit" /F >nul 2>&1
 )
-schtasks /Create /TN "local-agent-memory-audit" /TR "%AUDIT_CMD%" /SC ONSTART /DELAY 0002:30 /F >nul
+schtasks /Create /TN "symbiont-memory-audit" /TR "%AUDIT_CMD%" /SC ONSTART /DELAY 0002:30 /F >nul
 if %ERRORLEVEL% EQU 0 (
-    echo       local-agent-memory-audit 已設定（開機後 2.5 分鐘補跑）
+    echo       symbiont-memory-audit 已設定（開機後 2.5 分鐘補跑）
 ) else (
-    echo [警告] local-agent-memory-audit Task Scheduler 設定失敗（可手動執行）
+    echo [警告] symbiont-memory-audit Task Scheduler 設定失敗（可手動執行）
 )
 
 REM babysit 每 2 分鐘（若 agents.yaml 存在才設定）
 if exist "%AGENT_DIR%\data\agents.yaml" (
     set "BABYSIT_CMD=cmd /c cd /d \"%AGENT_DIR%\" ^& python src\babysit.py"
-    schtasks /Query /TN "local-agent-babysit" >nul 2>&1
+    schtasks /Query /TN "symbiont-babysit" >nul 2>&1
     if %ERRORLEVEL% EQU 0 (
-        schtasks /Delete /TN "local-agent-babysit" /F >nul 2>&1
+        schtasks /Delete /TN "symbiont-babysit" /F >nul 2>&1
     )
-    schtasks /Create /TN "local-agent-babysit" /TR "!BABYSIT_CMD!" /SC MINUTE /MO 2 /F >nul
+    schtasks /Create /TN "symbiont-babysit" /TR "!BABYSIT_CMD!" /SC MINUTE /MO 2 /F >nul
     if %ERRORLEVEL% EQU 0 (
-        echo       local-agent-babysit 已設定（每 2 分鐘）
+        echo       symbiont-babysit 已設定（每 2 分鐘）
     ) else (
-        echo [警告] local-agent-babysit Task Scheduler 設定失敗
+        echo [警告] symbiont-babysit Task Scheduler 設定失敗
     )
 ) else (
     echo       agents.yaml 不存在，略過 babysit Task Scheduler
