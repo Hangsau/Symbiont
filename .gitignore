@@ -1,0 +1,20 @@
+# Runtime state — 不進版本控制
+data/*.log
+data/*.txt
+data/state.json
+data/babysit_state.json
+data/babysit.lock
+data/teaching_state/
+
+# agents.yaml 含個人 SSH/IP 設定，用範例檔取代
+data/agents.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db

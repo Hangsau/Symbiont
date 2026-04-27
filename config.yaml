@@ -1,0 +1,75 @@
+# local-agent 設定檔
+# 路徑設計原則：
+#   - 使用 ~ 展開（跨平台），不寫死絕對路徑
+#   - local-agent 自身資料用相對路徑（相對於專案根目錄）
+#   - 機器差異只在此檔調整，程式碼不寫死任何路徑
+
+paths:
+  # ── Claude Code 全域設定 ─────────────────────────────────────
+  # sessions_base：所有 Claude Code 專案的 session 根目錄
+  # evolve.py 遞迴掃此目錄下所有 .jsonl，不限於特定專案
+  claude_projects_base: "~/.claude/projects"
+
+  # ── 主專案（memory 操作用）────────────────────────────────────
+  # primary_project：指定 memory_audit.py 操作哪個專案的 memory/
+  #
+  # 優先序（程式依此順序決定使用哪個值）：
+  #   1. 環境變數 LOCAL_AGENT_PRIMARY_PROJECT（最高優先，部署 / CI 用）
+  #   2. 此欄位（填入 workdir 路徑，留空 "" 則跳到步驟 3）
+  #   3. 自動偵測：掃 claude_projects_base，取最近有 session 的子目錄
+  #
+  # 範例：
+  #   Windows：primary_project: "C:/claudehome"
+  #   Mac：    primary_project: "/Users/xxx/claudehome"
+  #   留空讓程式自動偵測：primary_project: ""
+  primary_project: ""
+
+  # primary_project_dir / memory_dir / memory_index 由程式自動組合：
+  #   primary_project_dir = {claude_projects_base}/{encode(primary_project)}
+  #   memory_dir          = primary_project_dir/memory
+  #   memory_index        = memory_dir/MEMORY.md
+
+  # ── 全域規則檔 ────────────────────────────────────────────────
+  # evolve.py 讀寫此檔（習慣規則全域共用，不分專案）
+  global_claude_md: "~/.claude/CLAUDE.md"
+
+  # ── wrap 完成旗標 ──────────────────────────────────────────────
+  # wrap skill 完成後寫入此固定路徑，evolve.py --skip-if-wrap-done 讀取
+  # 固定在 ~/.claude/ 確保 wrap skill 和 local-agent 雙方都能直接存取
+  wrap_done_file: "~/.claude/.wrap_done.txt"
+
+  # ── local-agent 自身資料（相對於專案根目錄）─────────────────
+  data_dir: "data"
+  state_file: "data/state.json"
+  pending_evolve: "data/pending_evolve.txt"
+  pending_audit: "data/pending_audit.txt"
+  error_log: "data/error.log"
+  audit_log: "data/audit.log"
+
+  # ── evolution_log（留空 = 自動建立在 data/ 下）───────────────
+  # 已有歷史記錄的用戶：填入現有路徑以保留連續性
+  # 範例：~/claudehome/projects/evolve/evolution_log.md
+  evolution_log: "C:/claudehome/projects/evolve/evolution_log.md"
+
+  # ── claude CLI ────────────────────────────────────────────────
+  # 通常 "claude" 即可（setup script 確保 PATH 正確）
+  # Task Scheduler 環境若找不到，改為絕對路徑
+  claude_cli: "C:/Users/user/AppData/Roaming/npm/claude.cmd"
+
+  # ── 備份目標（選填，留空則跳過備份）─────────────────────────
+  # 範例 Windows：~/Desktop/backup-claude
+  # 範例 Mac：~/Documents/backup-claude
+  backup_dir: ""
+
+claude_runner:
+  timeout_seconds: 120
+  max_retries: 2
+
+session_reader:
+  max_turns: 50          # 只取最後 N 輪，避免 prompt 過長
+
+memory_audit:
+  enabled: false                   # true = 啟用自動維護；預設關閉，用戶主動啟用
+  auto_archive: true               # false = 只報告不移動任何檔案
+  thoughts_archive_threshold: 30   # thoughts/ 超過此數量 → 最舊 10 條移至 archive
+  memory_index_warn_lines: 170     # MEMORY.md 超過此行數 → 輸出警告
