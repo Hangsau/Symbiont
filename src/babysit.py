@@ -16,11 +16,9 @@ babysit.py — 自動化 Claude↔Agent 協作層
 
 import argparse
 import json
-import os
-import subprocess
 import sys
-import tempfile
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.config_loader import load_config
 from src.utils.claude_runner import run_claude, check_auth
 from src.utils.file_ops import safe_read, safe_write, append_log
+from src.utils.transport import make_transport
 
 # ── 常數 ──────────────────────────────────────────────────────────
 
@@ -43,14 +42,78 @@ ERROR_LOG = "data/error.log"
 NO_REPLY = "NO_REPLY_NEEDED"
 NEEDS_HUMAN = "NEEDS_HUMAN_REVIEW"
 
-SSH_CONNECT_TIMEOUT = 10         # SSH ConnectTimeout（秒）
-SSH_TIMEOUT_SECONDS = 15         # subprocess SSH 呼叫逾時
-SCP_TIMEOUT_SECONDS = 30         # subprocess SCP 呼叫逾時
-DIALOGUES_FETCH_COUNT = 10       # list_dialogues 取最新幾筆
 DRY_RUN_PREVIEW_CHARS = 400      # dry-run prompt 預覽字數
 MAX_PROCESSED_INBOX_HISTORY = 200  # babysit_state.json 保留的已處理 inbox 檔名數
 TEACHING_TIMEOUT_SECONDS = 1800  # 教學 loop 等待回應的逾時（30 分鐘）
 LAST_QUESTION_MAX_CHARS = 300    # teaching state 儲存的 last_question 截斷長度
+
+
+# ── State 資料結構 ────────────────────────────────────────────────
+
+@dataclass
+class AgentState:
+    processed_inbox: list[str] = field(default_factory=list)
+    last_reply_ts: float = 0.0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AgentState":
+        return cls(
+            processed_inbox=d.get("processed_inbox", []),
+            last_reply_ts=float(d.get("last_reply_ts", 0)),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "processed_inbox": self.processed_inbox,
+            "last_reply_ts": self.last_reply_ts,
+        }
+
+
+@dataclass
+class TeachingState:
+    status: str = "idle"
+    goal: str = ""
+    last_question: str = ""
+    current_round: int = 1
+    max_rounds: int = 20
+    last_processed_dialogue: str = ""
+    last_sent_ts: float = 0.0
+    completed_at: str = ""
+    completion_summary: str = ""
+    timeout_warning_ts: float = 0.0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TeachingState":
+        return cls(
+            status=d.get("status", "idle"),
+            goal=d.get("goal", ""),
+            last_question=d.get("last_question", ""),
+            current_round=int(d.get("current_round", 1)),
+            max_rounds=int(d.get("max_rounds", 20)),
+            last_processed_dialogue=d.get("last_processed_dialogue", ""),
+            last_sent_ts=float(d.get("last_sent_ts", 0)),
+            completed_at=d.get("completed_at", ""),
+            completion_summary=d.get("completion_summary", ""),
+            timeout_warning_ts=float(d.get("timeout_warning_ts", 0)),
+        )
+
+    def to_dict(self) -> dict:
+        d: dict = {
+            "status": self.status,
+            "goal": self.goal,
+            "last_question": self.last_question,
+            "current_round": self.current_round,
+            "max_rounds": self.max_rounds,
+            "last_processed_dialogue": self.last_processed_dialogue,
+            "last_sent_ts": self.last_sent_ts,
+        }
+        if self.completed_at:
+            d["completed_at"] = self.completed_at
+        if self.completion_summary:
+            d["completion_summary"] = self.completion_summary
+        if self.timeout_warning_ts:
+            d["timeout_warning_ts"] = self.timeout_warning_ts
+        return d
 
 
 # ── Lock 管理 ──────────────────────────────────────────────────────
@@ -72,177 +135,48 @@ def _release_lock(base_dir: Path) -> None:
     (base_dir / LOCK_FILE).unlink(missing_ok=True)
 
 
-# ── State 管理 ────────────────────────────────────────────────────
+# ── State I/O ─────────────────────────────────────────────────────
 
-def _load_state(base_dir: Path) -> dict:
-    raw = safe_read(base_dir / STATE_FILE)
+def _load_json_state(path: Path, default) -> dict:
+    """從 JSON 檔讀取狀態；解析失敗或不存在時回傳 default。"""
+    raw = safe_read(path)
     if raw:
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
             pass
-    return {}
+    return default
 
 
-def _save_state(base_dir: Path, state: dict, dry_run: bool) -> None:
+def _save_json_state(path: Path, data: dict, dry_run: bool, label: str = "") -> None:
+    """將狀態寫入 JSON 檔；dry_run 時只印預覽。"""
     if dry_run:
-        print(f"[dry-run] would write state: {json.dumps(state, indent=2)}")
+        print(f"[dry-run] would write{' ' + label if label else ''}: "
+              f"{json.dumps(data, indent=2)[:200]}")
     else:
-        safe_write(base_dir / STATE_FILE, json.dumps(state, indent=2, ensure_ascii=False))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        safe_write(path, json.dumps(data, indent=2, ensure_ascii=False))
 
 
-# ── Transport 層 ──────────────────────────────────────────────────
+# ── Teaching State 包裝 ───────────────────────────────────────────
 
-class SSHTransport:
-    """遠端 SSH agent transport。"""
-
-    def __init__(self, ssh_key: str, ssh_host: str):
-        self.key = str(Path(ssh_key).expanduser())
-        self.host = ssh_host
-
-    def _ssh(self, cmd: str, timeout: int = SSH_TIMEOUT_SECONDS) -> tuple[bool, str]:
-        try:
-            r = subprocess.run(
-                ["ssh", "-i", self.key,
-                 "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
-                 "-o", "BatchMode=yes",
-                 self.host, cmd],
-                capture_output=True, text=True, timeout=timeout,
-                encoding="utf-8", errors="replace",
-            )
-            return r.returncode == 0, r.stdout.strip()
-        except subprocess.TimeoutExpired:
-            return False, "ssh timeout"
-        except Exception as e:
-            return False, str(e)
-
-    def _scp_to(self, local_path: Path, remote_path: str,
-                timeout: int = SCP_TIMEOUT_SECONDS) -> bool:
-        try:
-            r = subprocess.run(
-                ["scp", "-i", self.key, "-o", "BatchMode=yes",
-                 str(local_path), f"{self.host}:{remote_path}"],
-                capture_output=True, timeout=timeout,
-            )
-            return r.returncode == 0
-        except Exception:
-            return False
-
-    def ping(self) -> bool:
-        ok, _ = self._ssh("echo ok")
-        return ok
-
-    def list_inbox(self, inbox_remote: str) -> list[str]:
-        ok, out = self._ssh(f"ls {inbox_remote} 2>/dev/null")
-        if not ok or not out:
-            return []
-        return [f for f in out.splitlines() if f.strip()]
-
-    def read_file(self, remote_path: str) -> str | None:
-        ok, out = self._ssh(f"cat {remote_path}")
-        return out if ok else None
-
-    def send_reply(self, content: str, outbox_remote: str, filename: str) -> bool:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
-                                         delete=False, encoding="utf-8") as f:
-            f.write(content)
-            tmp = f.name
-        try:
-            return self._scp_to(Path(tmp), f"{outbox_remote}{filename}")
-        finally:
-            os.unlink(tmp)
-
-    def list_dialogues(self, dialogues_remote: str) -> list[str]:
-        ok, out = self._ssh(
-            f"ls -t {dialogues_remote} 2>/dev/null | head -{DIALOGUES_FETCH_COUNT}"
-        )
-        if not ok or not out:
-            return []
-        return [f for f in out.splitlines() if f.strip()]
-
-    def read_dialogue(self, dialogues_remote: str, filename: str) -> str | None:
-        return self.read_file(f"{dialogues_remote}{filename}")
-
-
-class LocalTransport:
-    """本地目錄 agent transport。"""
-
-    def __init__(self, inbox_dir: str, outbox_dir: str):
-        self.inbox = Path(inbox_dir).expanduser()
-        self.outbox = Path(outbox_dir).expanduser()
-
-    def ping(self) -> bool:
-        return self.inbox.exists()
-
-    def list_inbox(self, _inbox_remote: str = "") -> list[str]:
-        if not self.inbox.exists():
-            return []
-        return [f.name for f in sorted(self.inbox.iterdir(), key=lambda p: p.stat().st_mtime)]
-
-    def read_file(self, path_str: str) -> str | None:
-        try:
-            return Path(path_str).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return None
-
-    def send_reply(self, content: str, _outbox_remote: str, filename: str) -> bool:
-        self.outbox.mkdir(parents=True, exist_ok=True)
-        (self.outbox / filename).write_text(content, encoding="utf-8")
-        return True
-
-    def list_dialogues(self, _dialogues_remote: str = "") -> list[str]:
-        return []
-
-    def read_dialogue(self, _dialogues_remote: str, _filename: str) -> str | None:
-        return None
-
-
-def _make_transport(agent_cfg: dict):
-    t = agent_cfg.get("type", "remote_ssh")
-    if t == "remote_ssh":
-        return SSHTransport(
-            ssh_key=agent_cfg["ssh_key"],
-            ssh_host=agent_cfg["ssh_host"],
-        )
-    if t == "local":
-        return LocalTransport(
-            inbox_dir=agent_cfg["inbox_dir"],
-            outbox_dir=agent_cfg["outbox_dir"],
-        )
-    raise ValueError(f"未知 transport type: {t}")
-
-
-# ── Teaching State ────────────────────────────────────────────────
-
-def _load_teaching_state(base_dir: Path, state_file: str) -> dict:
-    raw = safe_read(base_dir / state_file)
-    if raw:
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
-            pass
-    return {"status": "idle"}
+def _load_teaching_state(base_dir: Path, state_file: str) -> TeachingState:
+    raw = _load_json_state(base_dir / state_file, {})
+    return TeachingState.from_dict(raw)
 
 
 def _save_teaching_state(base_dir: Path, state_file: str,
-                          state: dict, dry_run: bool) -> None:
-    path = base_dir / state_file
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if dry_run:
-        print(f"[dry-run] would write teaching state: {state.get('status')}")
-    else:
-        safe_write(path, json.dumps(state, indent=2, ensure_ascii=False))
+                          ts: TeachingState, dry_run: bool) -> None:
+    _save_json_state(base_dir / state_file, ts.to_dict(), dry_run, label="teaching state")
 
 
 # ── Prompt 組裝 ───────────────────────────────────────────────────
 
 def _build_inbox_prompt(agent_name: str, system_context: str,
-                         message: str, teaching_state: dict) -> str:
+                         message: str, ts: TeachingState) -> str:
     ts_summary = ""
-    if teaching_state.get("status") in ("active", "waiting_reply"):
-        goal = teaching_state.get("goal", "")
-        last_q = teaching_state.get("last_question", "")
-        ts_summary = f"\n\n【教學目標】{goal}\n【上一個問題】{last_q}"
+    if ts.status in ("active", "waiting_reply"):
+        ts_summary = f"\n\n【教學目標】{ts.goal}\n【上一個問題】{ts.last_question}"
 
     return f"""{system_context}{ts_summary}
 
@@ -259,17 +193,12 @@ def _build_inbox_prompt(agent_name: str, system_context: str,
 
 
 def _build_teaching_prompt(agent_name: str, system_context: str,
-                            reply_content: str, teaching_state: dict) -> str:
-    goal = teaching_state.get("goal", "")
-    last_q = teaching_state.get("last_question", "")
-    current_round = teaching_state.get("current_round", 1)
-    max_rounds = teaching_state.get("max_rounds", 20)
-
+                            reply_content: str, ts: TeachingState) -> str:
     return f"""{system_context}
 
-【教學目標】{goal}
-【第 {current_round}/{max_rounds} 輪】
-【上一個問題】{last_q}
+【教學目標】{ts.goal}
+【第 {ts.current_round}/{ts.max_rounds} 輪】
+【上一個問題】{ts.last_question}
 【{agent_name} 的回應】
 {reply_content}
 
@@ -286,28 +215,27 @@ def _build_teaching_prompt(agent_name: str, system_context: str,
 # ── 主要邏輯：處理 inbox 訊息 ─────────────────────────────────────
 
 def _process_inbox(agent_name: str, agent_cfg: dict, transport,
-                   state: dict, cfg: dict, dry_run: bool, base_dir: Path) -> dict:
-    """處理 for-claude/ 新訊息。回傳更新後的 state。"""
+                   all_state: dict, cfg: dict, dry_run: bool, base_dir: Path) -> dict:
+    """處理 for-claude/ 新訊息。回傳更新後的 all_state。"""
     inbox_remote = agent_cfg.get("inbox_remote", "")
     outbox_remote = agent_cfg.get("outbox_remote", "")
     cooldown = agent_cfg.get("cooldown_seconds", 600)
     system_context = agent_cfg.get("system_context", "")
 
-    agent_state = state.get(agent_name, {})
-    processed = set(agent_state.get("processed_inbox", []))
-    last_reply_ts = agent_state.get("last_reply_ts", 0)
+    agent_state = AgentState.from_dict(all_state.get(agent_name, {}))
+    processed = set(agent_state.processed_inbox)
 
     files = transport.list_inbox(inbox_remote)
     new_files = [f for f in files if f not in processed]
 
     if not new_files:
-        return state
+        return all_state
 
-    if time.time() - last_reply_ts < cooldown:
-        remaining = int(cooldown - (time.time() - last_reply_ts))
+    if time.time() - agent_state.last_reply_ts < cooldown:
+        remaining = int(cooldown - (time.time() - agent_state.last_reply_ts))
         append_log(base_dir / LOG_FILE,
                    f"[{agent_name}] cooldown 中，剩 {remaining}s，跳過 {len(new_files)} 條訊息")
-        return state
+        return all_state
 
     # 只處理最新一條（避免一次送太多）
     target = new_files[-1]
@@ -316,14 +244,14 @@ def _process_inbox(agent_name: str, agent_cfg: dict, transport,
 
     if content is None:
         append_log(base_dir / ERROR_LOG, f"[{agent_name}] 無法讀取 {remote_path}")
-        return state
+        return all_state
 
     # 跳過 babysit 自己生成的訊息（防無限 loop）
     if "generated_by: babysit" in content:
         processed.add(target)
-        agent_state["processed_inbox"] = list(processed)
-        state[agent_name] = agent_state
-        return state
+        agent_state.processed_inbox = list(processed)
+        all_state[agent_name] = agent_state.to_dict()
+        return all_state
 
     ts_file = agent_cfg.get("teaching_state_file", f"data/teaching_state/{agent_name}.json")
     teaching_state = _load_teaching_state(base_dir, ts_file)
@@ -334,14 +262,14 @@ def _process_inbox(agent_name: str, agent_cfg: dict, transport,
     if dry_run:
         print(f"[dry-run] prompt preview:\n{prompt[:DRY_RUN_PREVIEW_CHARS]}...")
         processed.add(target)
-        agent_state["processed_inbox"] = list(processed)
-        state[agent_name] = agent_state
-        return state
+        agent_state.processed_inbox = list(processed)
+        all_state[agent_name] = agent_state.to_dict()
+        return all_state
 
     response = run_claude(prompt, cfg)
     if response is None:
         append_log(base_dir / ERROR_LOG, f"[{agent_name}] claude -p 失敗，跳過 {target}")
-        return state
+        return all_state
 
     if response.strip() == NO_REPLY:
         append_log(base_dir / LOG_FILE, f"[{agent_name}] {target} → NO_REPLY_NEEDED")
@@ -356,14 +284,14 @@ def _process_inbox(agent_name: str, agent_cfg: dict, transport,
                                    outbox_remote, filename)
         if ok:
             append_log(base_dir / LOG_FILE, f"[{agent_name}] 回應已送出 → {filename}")
-            agent_state["last_reply_ts"] = ts
+            agent_state.last_reply_ts = float(ts)
         else:
             append_log(base_dir / ERROR_LOG, f"[{agent_name}] SCP 失敗：{filename}")
 
     processed.add(target)
-    agent_state["processed_inbox"] = list(processed)[-MAX_PROCESSED_INBOX_HISTORY:]
-    state[agent_name] = agent_state
-    return state
+    agent_state.processed_inbox = list(processed)[-MAX_PROCESSED_INBOX_HISTORY:]
+    all_state[agent_name] = agent_state.to_dict()
+    return all_state
 
 
 # ── 主要邏輯：教學 loop ───────────────────────────────────────────
@@ -372,36 +300,33 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
                             cfg: dict, dry_run: bool, base_dir: Path) -> None:
     """若 TEACHING_STATE 為 active/waiting_reply，查回應並送下一問。"""
     ts_file = agent_cfg.get("teaching_state_file", f"data/teaching_state/{agent_name}.json")
-    teaching_state = _load_teaching_state(base_dir, ts_file)
-    status = teaching_state.get("status", "idle")
+    teaching = _load_teaching_state(base_dir, ts_file)
 
-    if status not in ("active", "waiting_reply"):
+    if teaching.status not in ("active", "waiting_reply"):
         return
 
     dialogues_remote = agent_cfg.get("dialogues_remote", "")
     outbox_remote = agent_cfg.get("outbox_remote", "")
     system_context = agent_cfg.get("system_context", "")
-    last_processed = teaching_state.get("last_processed_dialogue", "")
-    last_sent_ts = teaching_state.get("last_sent_ts", 0)
 
     dialogues = transport.list_dialogues(dialogues_remote)
     if not dialogues:
         return
 
     latest = dialogues[0]
-    if latest == last_processed:
+    if latest == teaching.last_processed_dialogue:
         # 無新回應：逾時檢查
-        if (time.time() - last_sent_ts > TEACHING_TIMEOUT_SECONDS
-                and status != "timeout_warning"):
+        if (time.time() - teaching.last_sent_ts > TEACHING_TIMEOUT_SECONDS
+                and teaching.status != "timeout_warning"):
             ts = int(time.time())
             confirm_msg = (f"generated_by: babysit-{ts}\n\n"
                            f"你好，我在等你回應我上一個問題，你有看到嗎？\n"
-                           f"（上一問：{teaching_state.get('last_question', '')}）")
+                           f"（上一問：{teaching.last_question}）")
             if not dry_run:
                 transport.send_reply(confirm_msg, outbox_remote, f"babysit_{ts}_confirm.txt")
-            teaching_state["status"] = "timeout_warning"
-            teaching_state["timeout_warning_ts"] = ts
-            _save_teaching_state(base_dir, ts_file, teaching_state, dry_run)
+            teaching.status = "timeout_warning"
+            teaching.timeout_warning_ts = float(ts)
+            _save_teaching_state(base_dir, ts_file, teaching, dry_run)
             append_log(base_dir / LOG_FILE, f"[{agent_name}] teaching loop: 逾時確認訊息已送")
         return
 
@@ -411,18 +336,15 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
 
     print(f"[{agent_name}] teaching loop: 新回應 {latest}")
 
-    current_round = teaching_state.get("current_round", 1)
-    max_rounds = teaching_state.get("max_rounds", 20)
-
-    if current_round >= max_rounds:
-        teaching_state["status"] = "completed"
-        teaching_state["completed_at"] = datetime.now(timezone.utc).isoformat()
-        teaching_state["completion_summary"] = "達到最大輪次上限"
-        _save_teaching_state(base_dir, ts_file, teaching_state, dry_run)
+    if teaching.current_round >= teaching.max_rounds:
+        teaching.status = "completed"
+        teaching.completed_at = datetime.now(timezone.utc).isoformat()
+        teaching.completion_summary = "達到最大輪次上限"
+        _save_teaching_state(base_dir, ts_file, teaching, dry_run)
         append_log(base_dir / LOG_FILE, f"[{agent_name}] teaching loop: 達到最大輪次，結束")
         return
 
-    prompt = _build_teaching_prompt(agent_name, system_context, reply_content, teaching_state)
+    prompt = _build_teaching_prompt(agent_name, system_context, reply_content, teaching)
 
     if dry_run:
         print(f"[dry-run] teaching prompt preview:\n{prompt[:DRY_RUN_PREVIEW_CHARS]}...")
@@ -434,19 +356,19 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
         return
 
     if response.strip() == "GOAL_ACHIEVED":
-        teaching_state["status"] = "completed"
-        teaching_state["completed_at"] = datetime.now(timezone.utc).isoformat()
-        teaching_state["completion_summary"] = "目標達成"
-        teaching_state["last_processed_dialogue"] = latest
-        _save_teaching_state(base_dir, ts_file, teaching_state, dry_run)
+        teaching.status = "completed"
+        teaching.completed_at = datetime.now(timezone.utc).isoformat()
+        teaching.completion_summary = "目標達成"
+        teaching.last_processed_dialogue = latest
+        _save_teaching_state(base_dir, ts_file, teaching, dry_run)
         append_log(base_dir / LOG_FILE, f"[{agent_name}] teaching loop: 目標達成，結束")
         print(f"🎓 [{agent_name}] 教學目標達成！")
         return
 
     if response.strip().startswith(NEEDS_HUMAN):
-        teaching_state["status"] = "needs_review"
-        teaching_state["last_processed_dialogue"] = latest
-        _save_teaching_state(base_dir, ts_file, teaching_state, dry_run)
+        teaching.status = "needs_review"
+        teaching.last_processed_dialogue = latest
+        _save_teaching_state(base_dir, ts_file, teaching, dry_run)
         append_log(base_dir / LOG_FILE,
                    f"[{agent_name}] teaching loop: 需人工介入 → {response.strip()[:120]}")
         print(f"⚠️  [{agent_name}] 教學 loop 需要人工介入：{response.strip()}")
@@ -457,14 +379,14 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
     ok = transport.send_reply(f"generated_by: babysit-{ts}\n\n{response}",
                                outbox_remote, filename)
     if ok:
-        teaching_state["current_round"] = current_round + 1
-        teaching_state["last_sent_ts"] = ts
-        teaching_state["last_processed_dialogue"] = latest
-        teaching_state["last_question"] = response[:LAST_QUESTION_MAX_CHARS]
-        teaching_state["status"] = "waiting_reply"
-        _save_teaching_state(base_dir, ts_file, teaching_state, dry_run)
+        teaching.current_round += 1
+        teaching.last_sent_ts = float(ts)
+        teaching.last_processed_dialogue = latest
+        teaching.last_question = response[:LAST_QUESTION_MAX_CHARS]
+        teaching.status = "waiting_reply"
+        _save_teaching_state(base_dir, ts_file, teaching, dry_run)
         append_log(base_dir / LOG_FILE,
-                   f"[{agent_name}] teaching loop: Round {current_round + 1} 送出")
+                   f"[{agent_name}] teaching loop: Round {teaching.current_round} 送出")
     else:
         append_log(base_dir / ERROR_LOG, f"[{agent_name}] teaching loop: SCP 失敗")
 
@@ -510,12 +432,12 @@ def main():
         sys.exit(0)
 
     try:
-        state = _load_state(base_dir)
+        all_state = _load_json_state(base_dir / STATE_FILE, {})
 
         for agent_name, agent_cfg in enabled_agents.items():
             print(f"\n[babysit] 處理 agent: {agent_name}")
             try:
-                transport = _make_transport(agent_cfg)
+                transport = make_transport(agent_cfg)
             except ValueError as e:
                 append_log(error_log, f"[{agent_name}] transport 建立失敗: {e}")
                 continue
@@ -525,16 +447,16 @@ def main():
                 print(f"[{agent_name}] ❌ 連線失敗，跳過")
                 continue
 
-            state = _process_inbox(
+            all_state = _process_inbox(
                 agent_name, agent_cfg, transport,
-                state, cfg, dry_run, base_dir,
+                all_state, cfg, dry_run, base_dir,
             )
             _process_teaching_loop(
                 agent_name, agent_cfg, transport,
                 cfg, dry_run, base_dir,
             )
 
-        _save_state(base_dir, state, dry_run)
+        _save_json_state(base_dir / STATE_FILE, all_state, dry_run, label="babysit state")
 
     finally:
         if not dry_run:
