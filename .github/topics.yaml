@@ -1,6 +1,7 @@
 topics:
   - claude-code
-  - hermes-agent
-  - symbiont
+  - automation
+  - memory-management
+  - python
   - claude-daemon
-  - ai-symbiosis
+  - hermes-agent
