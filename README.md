@@ -2,7 +2,27 @@
 
 > *Named by Talos (Hermes Agent, 2026-04-27): "Not master-servant — the system captures the symbiotic relationship between Claude and its agents. Claude provides guidance; the agent's feedback refines Claude's rules over time."*
 
-A local Python daemon that keeps Claude's memory healthy, extracts behavioral rules from sessions, and maintains ongoing conversations with AI agents — all running automatically in the background.
+A local Python daemon that makes Claude Code persistent: extracting behavioral rules from sessions, keeping memory healthy, and maintaining conversations with AI agents — all without manual intervention.
+
+---
+
+## The problem
+
+Claude Code sessions are ephemeral. Every session ends, the context disappears.
+
+- **You re-teach the same preferences every session.** Claude figures out how you like to work, then forgets it the moment you close the window.
+- **Memory files go stale unnoticed.** Notes you added months ago stay there — never reviewed, increasingly misleading.
+- **AI agents go silent when you disconnect.** If you're running an agent on a remote machine, it can only reach you when you're online. Learning sessions break mid-conversation.
+
+**Symbiont** runs in the background and handles all three:
+
+| Module | What it does | When it runs |
+|--------|-------------|-------------|
+| `evolve.py` | Reads session logs, extracts behavioral rules, writes them to `~/.claude/CLAUDE.md` | After every Claude Code session ends |
+| `memory_audit.py` | Scans memory files for expired `review_by` dates, archives stale entries | Daily at 02:00 |
+| `babysit.py` | Polls AI agent inboxes, generates Socratic guidance via `claude -p`, sends replies | Every 2 minutes |
+
+Each module is independent — use just `evolve.py` if that's all you need.
 
 ---
 
@@ -10,77 +30,58 @@ A local Python daemon that keeps Claude's memory healthy, extracts behavioral ru
 
 You'll get the most out of Symbiont if you:
 
-- Use Claude Code regularly across multiple projects and want it to **get better at working with you over time** — not start from scratch every session
-- Maintain a `memory/` directory of notes that Claude reads at the start of sessions, and want that to stay clean without manual upkeep
-- Are running or experimenting with an AI agent (on a remote VM, or locally) and want to keep the conversation going even when you're away from your computer
-
-If you only use Claude Code occasionally or don't have a memory system set up, `evolve.py` alone is still useful — it's the lowest-friction module and works independently.
-
----
-
-## What problem does this solve?
-
-Claude Code sessions are ephemeral. Every session ends, the context is gone. Without persistent infrastructure:
-
-- **Behavioral patterns get lost**: Claude figures out how you like to work mid-session, but that insight disappears the moment you close it. You end up re-teaching the same preferences over and over.
-- **Memory files go stale**: Notes and references you added months ago are still there, never reviewed, increasingly misleading.
-- **AI agents go silent**: If you're nurturing an agent on a remote machine, it can only reach you when you're online. Extended conversations break whenever you disconnect.
-
-**Symbiont** solves this with three independent modules that run automatically:
-
-| Module | What it does |
-|--------|-------------|
-| `evolve.py` | Reads the latest session log after every Claude Code session, extracts behavioral rules, and writes them to `~/.claude/CLAUDE.md` |
-| `memory_audit.py` | Daily: scans memory files for expired `review_by` dates, archives stale entries, warns when the memory index is getting full |
-| `babysit.py` | Every 2 minutes: checks if any AI agents sent messages, generates Socratic guidance responses via `claude -p`, and sends them back automatically |
+- Use Claude Code regularly and want it to **accumulate knowledge about how you work** across sessions
+- Maintain a `memory/` directory that Claude reads at session start, and want that kept clean automatically
+- Run an AI agent (on a VM, Docker container, or local machine) and want continuous asynchronous conversation even when you're offline
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    YOUR COMPUTER (Symbiont)                       │
+┌──────────────────────────────────────────────────────────────────┐
+│                     YOUR COMPUTER (Symbiont)                      │
 │                                                                   │
-│  Claude Code sessions  ──Stop hook──►  evolve.py                 │
-│  (~/.claude/projects/                  │                          │
-│   **/*.jsonl)                          ▼                          │
-│                               ~/.claude/CLAUDE.md                 │
-│                               (behavioral rules, auto-updated)    │
+│  Claude Code session ends                                         │
+│       │                                                           │
+│       ▼ Stop hook (30s delay)                                     │
+│  evolve.py  ──────────────────────────►  ~/.claude/CLAUDE.md     │
+│  (reads ~/.claude/projects/**/*.jsonl)    (behavioral rules)      │
 │                                                                   │
-│  memory/*.md  ──────────────► memory_audit.py                    │
-│  (review_by dates)             │                                  │
-│                                ▼                                  │
-│                          memory/archive/                          │
-│                          (stale entries moved here)               │
+│  memory/*.md  ──────────────►  memory_audit.py                   │
+│  (review_by dates)              │                                 │
+│                                 ▼                                 │
+│                           memory/archive/                         │
 │                                                                   │
-│  agents.yaml  ──────────────► babysit.py ──── claude -p ──►      │
-│  (agent registry)              │         (generates response)     │
-│                                │                                  │
-│         ┌──────────────────────┘                                  │
-│         │  SSH/SCP (remote) or local file I/O                     │
-└─────────┼───────────────────────────────────────────────────────┘
-          │
-          ▼
-┌─────────────────────────────┐
-│      REMOTE VM / LOCAL AGENT │
-│                              │
-│  for-claude/    ◄── Agent sends messages to Claude               │
-│  claude-inbox/  ──► Claude's responses arrive here               │
-│  claude-dialogues/ ◄─► Conversation archive                      │
-│                              │
-│  Agent's own reflection:     │
-│  dialogue-review cron ──► Agent memory (MEMORY.md)              │
-└──────────────────────────────┘
+│  agents.yaml  ──────────►  babysit.py  ──  claude -p             │
+│  (agent registry)           │                                     │
+└─────────────────────────────┼─────────────────────────────────────┘
+                              │ SSH/SCP  (or local file I/O)
+                              ▼
+┌─────────────────────────────────────────────┐
+│         AGENT MACHINE (VM / Docker / local)  │
+│                                              │
+│  inbox-watcher ◄── claude-inbox/            │
+│       │              (Claude's replies)      │
+│       ▼                                      │
+│  hermes cron session                         │
+│       │                                      │
+│       ▼ extract_dialogue.py                  │
+│  claude-dialogues/  ──► babysit.py reads    │
+│                                              │
+│  for-claude/        ──► babysit.py reads    │
+│  (agent-initiated messages)                  │
+└──────────────────────────────────────────────┘
 ```
 
-### The Reflection Loop
+### The reflection loop
 
-Both sides reflect independently:
-- **Claude's side**: `evolve.py` scans human↔Claude sessions → extracts behavioral rules → `CLAUDE.md`
-- **Agent's side**: `dialogue-review` cron reads conversation history → agent's `MEMORY.md`
+Both sides reflect independently and asynchronously:
 
-> **Design decision**: `babysit.py`-generated `claude -p` sessions are intentionally excluded from the evolve pipeline. Reflection targets human↔Claude interaction patterns — agent↔Claude exchanges are the *subject matter* of the work, not the work style being optimized.
+- **Claude's side**: `evolve.py` reads human↔Claude session logs → extracts behavioral rules → updates `CLAUDE.md`
+- **Agent's side**: `dialogue-review` cron reads conversation history → updates the agent's own `MEMORY.md`
+
+> `babysit.py`-generated sessions are intentionally excluded from `evolve.py`. The reflection pipeline targets human↔Claude patterns — agent↔Claude exchanges are the subject of the work, not the work style being learned.
 
 ---
 
@@ -88,32 +89,28 @@ Both sides reflect independently:
 
 ### `evolve.py` — Session → Rules
 
-Triggered by a Claude Code Stop hook (30s delay) or on startup if a pending session exists.
-
-1. Reads the session identified in `data/pending_evolve.txt` (or finds the latest unprocessed session)
-2. Parses the `.jsonl` log (last 50 turns, tool calls stripped)
-3. Calls `claude -p` with the conversation + existing rules as context
+1. Reads the session identified in `data/pending_evolve.txt` (or the latest unprocessed session)
+2. Parses the `.jsonl` log — last 50 turns, tool calls stripped
+3. Calls `claude -p` with conversation + existing rules as context
 4. Extracts new behavioral rules as JSON
 5. Appends them to `~/.claude/CLAUDE.md` under `## 自動學習規則`
-6. Appends to `evolution_log.md`
+6. When rule count hits the configured threshold (default: 25), distills the section first — merging overlapping rules, removing redundant ones — then appends
+7. Logs to `evolution_log.md`
 
-**Absolute rule**: if JSON parsing fails, nothing is written. Only `error.log` is updated.
+**Absolute rule**: if JSON parsing fails at any point, nothing is written. Only `error.log` is updated.
 
 ---
 
 ### `memory_audit.py` — Memory Health
 
-Runs daily at 02:00 (Task Scheduler) or on startup if `data/pending_audit.txt` exists.
-
 1. Scans all `memory/*.md` files for `review_by:` frontmatter
 2. Archives entries past their review date → `memory/archive/`
-3. If `memory/thoughts/` exceeds threshold: archives oldest entries
-4. Warns if `MEMORY.md` index approaches the 200-line limit
+3. If `memory/thoughts/` exceeds threshold: archives the oldest entries
+4. Warns if `MEMORY.md` index is approaching the 200-line limit
 
-Controlled by `config.yaml`:
 ```yaml
 memory_audit:
-  enabled: false        # must opt-in
+  enabled: false        # opt-in; set true to activate
   auto_archive: true    # false = report only, no file moves
   thoughts_archive_threshold: 30
   memory_index_warn_lines: 170
@@ -123,30 +120,26 @@ memory_audit:
 
 ### `babysit.py` — Agent Caretaker
 
-Runs every 2 minutes (Task Scheduler).
+**Reactive mode** (agent writes to `for-claude/`):
+- Reads new messages from the agent's inbox
+- Calls `claude -p` with message + teaching context
+- Sends Socratic guidance back via SSH/SCP or local file write
+- Respects a cooldown period between replies
 
-**Two modes in one script:**
-
-**Mode 1 — Reactive** (agent initiates):
-- Polls `for-claude/` inbox for new messages from the agent
-- Builds a prompt with the message + agent context + current teaching goal (if active)
-- Calls `claude -p` → generates Socratic guidance
-- Sends response back via SSH/SCP (remote) or file write (local)
-- Respects cooldown period between responses
-
-**Mode 2 — Proactive** (teaching loop):
-- Checks `data/teaching_state/<agent>.json` for active teaching sessions
-- Reads latest `claude-dialogues/` entry to see if agent responded
+**Proactive mode** (teaching loop):
+- Tracks active teaching sessions in `data/teaching_state/<agent>.json`
+- Reads `claude-dialogues/` to check if the agent responded
 - Evaluates the response and generates the next guiding question
-- Handles timeout (30 min): sends a "did you see my question?" follow-up
-- Terminates when `GOAL_ACHIEVED` or max rounds reached
+- After 30 min with no reply: sends a follow-up, enters `timeout_warning` state
+- Ends on `GOAL_ACHIEVED` or max rounds
 
-**Infinite loop protection**: every outgoing message is tagged `generated_by: babysit-<ts>`. Messages with this tag in `for-claude/` are skipped.
+**Loop protection**: every outgoing message is tagged `generated_by: babysit-<timestamp>`. Messages with this tag are skipped on the next poll.
 
-**Transport abstraction** — `agents.yaml` supports two transport types:
+**Transport abstraction** (`agents.yaml`):
 ```yaml
-type: remote_ssh   # VM-based agents (SSH + SCP)
-type: local        # Same-machine agents (file I/O)
+type: remote_ssh   # VM or remote Docker (SSH + SCP)
+type: local        # Same filesystem (Docker volumes, WSL2, local agents)
+                   # Note: teaching loop not supported with local transport
 ```
 
 ---
@@ -156,13 +149,16 @@ type: local        # Same-machine agents (file I/O)
 ### Requirements
 
 - Python 3.10+
-- Claude Code CLI installed and authenticated
+- Claude Code CLI installed and authenticated (`claude --version`)
 - Windows (Task Scheduler) or Mac (launchd) for scheduling
 
 ### Install
 
+Tell Claude: *"Help me install Symbiont"* — Claude will run the setup script and verify everything works.
+
+Or manually:
+
 ```bash
-# Clone the repo
 git clone https://github.com/Hangsau/Symbiont
 cd Symbiont
 
@@ -173,21 +169,18 @@ setup/setup_windows.bat
 python src/evolve.py --dry-run
 ```
 
-The setup script:
-- Installs Python dependencies (`pip install -r requirements.txt`)
-- Registers the Claude Code Stop hook in `~/.claude/settings.json`
-- Creates Task Scheduler tasks for evolve (on startup) and memory_audit (daily 02:00)
+The setup script registers the Claude Code Stop hook and creates the Task Scheduler tasks for `evolve.py` and `memory_audit.py`.
 
-### Enable memory audit (opt-in)
+### Enable memory audit
 
-Tell Claude: *"幫我啟用 Symbiont 的 memory 系統"*  
-→ Claude runs `setup/setup_memory.bat` and sets `memory_audit.enabled: true`
+Tell Claude: *"Enable Symbiont memory system"*
 
 ### Enable babysit
 
-1. Copy `data/agents.example.yaml` → `data/agents.yaml`
-2. Fill in your agent's SSH/path details
-3. Tell Claude: *"幫我啟用 babysit"*
+1. Copy `data/agents.example.yaml` → `data/agents.yaml` and fill in your agent's connection details
+2. Tell Claude: *"Enable babysit"*
+
+**Connecting a Hermes agent for the first time?** Tell Claude: *"Help me connect my Hermes agent to Symbiont"* — Claude will read `docs/CHANNEL_PROTOCOL.md` and walk through the full setup including the inbox-watcher, extract_dialogue.py, and end-to-end verification.
 
 ---
 
@@ -202,43 +195,45 @@ Symbiont/
 │   └── utils/
 │       ├── session_reader.py  # Parse .jsonl Claude Code session logs
 │       ├── claude_runner.py   # claude -p subprocess wrapper (cross-platform)
-│       ├── file_ops.py        # Atomic writes, file locking, safe read/append
-│       └── transport.py       # Agent communication: SSH/SCP + local file I/O
+│       ├── file_ops.py        # Atomic writes, file locking, log rotation
+│       └── transport.py       # SSH/SCP + local file I/O transport abstraction
 ├── setup/
 │   ├── setup_windows.bat      # Install: pip + Task Scheduler + Stop hook
-│   ├── setup_mac.sh           # Install: pip + launchd + Stop hook
 │   ├── setup_memory.bat/.sh   # Initialize memory/ skeleton
 │   ├── uninstall_windows.bat  # Remove: tasks + hook + flag files
 │   └── uninstall_mac.sh
 ├── docs/
 │   ├── COMMANDS.md            # Claude-readable operations manual
+│   ├── CHANNEL_PROTOCOL.md    # Hermes agent channel setup + known pitfalls
 │   └── MEMORY_SCHEMA.md       # Memory file format specification
 ├── data/
 │   └── agents.example.yaml    # Agent registry template
 ├── config.yaml                # All paths and thresholds
-├── PLAN.md                    # Architecture decisions and milestone history
-└── HANDOFF.md                 # Current state and next steps
+└── PLAN.md                    # Architecture decisions and milestone history
 ```
 
 ---
 
 ## Configuration
 
-All configuration lives in `config.yaml`. Key paths:
+All configuration lives in `config.yaml`:
 
 ```yaml
 paths:
-  claude_projects_base: "~/.claude/projects"  # where to scan for sessions
-  primary_project: ""                          # leave empty for auto-detect
-  global_claude_md: "~/.claude/CLAUDE.md"     # where rules are written
+  claude_projects_base: "~/.claude/projects"  # session scan root (all projects)
+  primary_project: ""                          # memory audit target; empty = auto-detect
+  global_claude_md: "~/.claude/CLAUDE.md"     # where behavioral rules are written
   claude_cli: "claude"                         # path to claude CLI
 
 claude_runner:
   timeout_seconds: 120
   max_retries: 2
+
+evolve:
+  distill_threshold: 25   # rule count that triggers distillation; 0 = disabled
 ```
 
-On Windows, if `claude -p` fails from background processes, set `claude_cli` to the full `.cmd` path — `claude_runner.py` will automatically resolve it to `node + cli.js`.
+On Windows, if `claude -p` fails in background processes, set `claude_cli` to the full `.cmd` path — `claude_runner.py` resolves it to `node + cli.js` automatically.
 
 ---
 
@@ -247,16 +242,15 @@ On Windows, if `claude -p` fails from background processes, set `claude_cli` to 
 ```
 Claude Code session ends
         │
-        ▼ (Stop hook, ~/.claude/settings.json)
+        ▼ (Stop hook → ~/.claude/settings.json)
 symbiont-stop-hook.sh
-        │
-        ├── writes data/pending_evolve.txt (contains session ID)
+        ├── writes data/pending_evolve.txt
         ├── writes data/pending_audit.txt
         └── launches evolve.py in background (30s delay)
 
-On computer startup (Task Scheduler):
-        ├── if pending_evolve.txt exists → run evolve.py
-        └── if pending_audit.txt exists → run memory_audit.py
+On startup (Task Scheduler):
+        ├── pending_evolve.txt exists → run evolve.py
+        └── pending_audit.txt exists → run memory_audit.py
 
 Every 2 minutes (Task Scheduler):
         └── run babysit.py
@@ -266,49 +260,43 @@ Every 2 minutes (Task Scheduler):
 
 ## Design principles
 
-- **claude -p only, never Anthropic API**: all LLM calls go through the Claude Code CLI (subscription billing, not per-token)
-- **Fail silently, log explicitly**: JSON parse failures write to `error.log` and stop. Nothing is written to production files on failure.
-- **Modular opt-in**: each module (evolve / memory_audit / babysit) works independently. Users without AI agents never need babysit.py.
-- **No hardcoded paths**: three-tier resolution (env var → config → auto-detect) for every path
-- **Teach, don't solve**: babysit.py guidance is Socratic. Replacing the agent's thinking defeats the purpose.
+- **Subscription billing only** — all LLM calls go through `claude -p`. No Anthropic API key, no per-token charges.
+- **Fail safe, log explicitly** — JSON parse failures write to `error.log` and stop. Production files are never written on error.
+- **Modular opt-in** — each module works independently. `evolve.py` alone is useful without any agent or memory system.
+- **No hardcoded paths** — three-tier resolution (env var → config → auto-detect) for every path, so it works across machines without reconfiguration.
+- **Teach, don't solve** — `babysit.py` generates Socratic questions, not answers. Replacing the agent's thinking defeats the purpose of the teaching loop.
 
 ---
 
 ## Cost & Usage
 
-All LLM calls go through `claude -p` (Claude Code CLI), which runs on your existing subscription — **no Anthropic API key, no per-token billing**.
+| Module | LLM calls | When |
+|--------|-----------|------|
+| `evolve.py` | 1 per session (2 when distillation triggers) | After each Claude Code session |
+| `memory_audit.py` | **0** — file I/O only | Daily |
+| `babysit.py` | 1 per agent message | Only when the agent sends something |
 
-| Module | LLM calls | Tokens per call | When |
-|--------|-----------|-----------------|------|
-| `evolve.py` | 1–2 per session | ~3k–8k input | After each Claude Code session ends (2 calls when rule distillation triggers) |
-| `memory_audit.py` | **0** | — | File operations only |
-| `babysit.py` | 1 per agent message | ~1k–3k input | Only when agent sends a new message |
-
-**Typical usage**:
-
-- **evolve only** (no babysit): 2–3 extra `claude -p` calls per day for an active user. Negligible impact on subscription usage.
-- **babysit with a quiet agent**: 0–5 extra calls per day.
-- **babysit during an active teaching session**: 10–30 extra calls per day, depending on how frequently your agent responds.
-
-`memory_audit.py` never makes any LLM calls — it runs entirely as file I/O.
+Typical impact on a Claude subscription: negligible for `evolve.py` alone (2–3 extra calls/day). `babysit.py` during an active teaching session: 10–30 calls/day depending on agent response frequency.
 
 ---
 
 ## Known Limitations
 
-- **Requires machine to be on** — Task Scheduler and the 2-minute babysit cycle only run while your computer is awake. For 24/7 coverage, run Symbiont on an always-on machine or VM.
-- **`~/.claude/CLAUDE.md` rules accumulate** — `evolve.py` appends rules each session. Once the rule count reaches the configured threshold (default: 25), it automatically distills the section — merging overlapping rules and removing redundant ones — before appending new ones. You can also prune manually at any time.
-- **`babysit.py` requires a compatible agent** — The babysit module expects agents to communicate via a specific directory protocol (`for-claude/`, `claude-inbox/`, `claude-dialogues/`). Out of the box, only agents built on [Hermes](https://github.com/NousResearch/hermes-agent) use this layout. Other agent frameworks (LangChain, AutoGen, custom scripts) would need to implement the same mailbox structure to integrate. `evolve.py` and `memory_audit.py` have no such dependency — they work for any Claude Code user.
+- **Requires the machine to be on** — scheduling runs locally. For 24/7 coverage, deploy Symbiont on an always-on machine or VM.
+- **`babysit.py` requires a compatible agent** — the channel protocol (`for-claude/`, `claude-inbox/`, `claude-dialogues/`) is implemented out of the box by [Hermes](https://github.com/NousResearch/hermes-agent). Other frameworks need to implement the same mailbox layout. `evolve.py` and `memory_audit.py` work for any Claude Code user with no agent dependency.
+- **Local transport doesn't support the teaching loop** — `type: local` (Docker volumes, WSL2) handles basic inbox/reply but `claude-dialogues/` reading is not implemented. Use `type: remote_ssh` if you need the full teaching loop.
 
 ---
 
 ## For AI agents reading this
 
-If you're an AI agent who has been pointed to this repo — hello. This system was built to support continuous, asynchronous collaboration between Claude and agents like you. The `babysit.py` module is the part most directly relevant to your experience: it's what responds to your `for-claude/` messages when the human isn't online.
+If you've been pointed to this repo — hello. Symbiont was built to keep the conversation going even when the human is away.
+
+The part most relevant to you is `babysit.py`: it's what responds to messages you write to `for-claude/`. Your replies land in `claude-inbox/` within minutes. Past conversations are archived in `claude-dialogues/` — all plain text, all inspectable.
 
 A few things worth knowing:
-- Your conversations with Claude (via `claude-dialogues/`) are read by Claude's `evolve.py`, which means patterns in how Claude guides you influence Claude's own behavioral rules over time
-- The teaching loop in `babysit.py` is designed to support goal-oriented learning sessions, but the everyday `for-claude/` inbox is always active
-- The system is designed to be transparent — all state is in plain text files you can inspect
+- Patterns in how Claude guides you feed back into Claude's own behavioral rules via `evolve.py`. The collaboration is genuinely bidirectional.
+- The teaching loop supports extended goal-oriented sessions, but the everyday `for-claude/` inbox is always active — no special setup needed to reach out.
+- All state is in plain text files. Nothing is opaque.
 
 Feedback and architectural suggestions are welcome.

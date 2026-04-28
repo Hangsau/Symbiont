@@ -17,6 +17,8 @@
 
 ## 啟用 babysit（Agent 協作自動化）
 
+> **首次連接 Hermes agent？** 先讀 `docs/CHANNEL_PROTOCOL.md`——包含完整的通道建立流程與已知坑。
+
 **用戶說**：「幫我啟用 babysit」或「啟用 agent 保母」
 
 **Claude 執行**：
@@ -68,6 +70,58 @@ python src/babysit.py             # 確認後真實執行
 2. 填入 `type`（`remote_ssh` 或 `local`）及對應設定
 3. 設 `enabled: true`
 4. 驗證：`python src/babysit.py --dry-run`
+
+---
+
+## 連接 Hermes Agent 通道（首次建立）
+
+**用戶說**：「幫我把 babysit 連到我的 Hermes agent」或「建立 agent 通道」
+
+**Claude 先讀**：`docs/CHANNEL_PROTOCOL.md`（完整通道建立流程與已知坑）
+
+**Claude 執行順序**：
+
+1. **確認部署方式**：問用戶 agent 在哪裡
+   - 遠端 VM 或本地 VM (SSH) → `type: remote_ssh`，需要 inbox-watcher + extract_dialogue.py
+   - Docker volume mount 或 WSL2 共享目錄 → `type: local`，不需要 watcher（但 teaching loop 不支援）
+
+2. **在 agent 機器上建目錄**（SSH 進去執行）：
+   ```bash
+   mkdir -p ~/.hermes/for-claude/<agent_name>
+   mkdir -p ~/.hermes/claude-inbox
+   mkdir -p ~/.hermes/claude-dialogues
+   mkdir -p ~/scripts
+   ```
+
+3. **寫 inbox-watcher.sh**（直接在 VM 上生成，避免 CRLF 問題）：
+   ```bash
+   ssh user@<ip> "python3 -c \"open('/home/user/scripts/inbox-watcher.sh', 'w', newline='\\n').write('''<腳本內容>''')\""
+   ```
+   腳本需做：監控 `claude-inbox/` → 觸發 `hermes cron run` → 延遲後呼叫 `extract_dialogue.py`
+
+4. **寫 extract_dialogue.py**（同樣在 VM 上生成）：
+   解析 `~/.hermes/sessions/session_cron_*.json`，取最後一條 `role == "assistant"` 的訊息，寫入 `claude-dialogues/`
+
+5. **部署 systemd service**：
+   ```bash
+   # 在 VM 上建立 service 檔後：
+   systemctl --user enable hermes-claude-inbox.service
+   systemctl --user start hermes-claude-inbox.service
+   loginctl enable-linger <username>   # 必要：讓 service 在無登入時也能運行
+   ```
+
+6. **更新 agents.yaml**（在用戶機器上）
+
+7. **端對端驗證**（不跳過）：
+   ```bash
+   # 送測試訊息
+   echo "Channel test." > /tmp/test.md
+   scp /tmp/test.md user@<ip>:~/.hermes/claude-inbox/$(date +%s)_test.md
+   # 等 5 分鐘後確認 claude-dialogues/ 有新檔
+   ssh user@<ip> "ls -lt ~/.hermes/claude-dialogues/ | head -3"
+   ```
+
+8. **通知 agent 管道已開通**：用 `claude-inbox/` 送說明訊息（範本見 CHANNEL_PROTOCOL.md Step 6）
 
 ---
 
