@@ -44,6 +44,14 @@ Symbiont/
 
 ---
 
+## 保姆行為規範
+
+babysit.py 代表 Claude Code 回應 agent 訊息時，必須遵守共生計劃教學框架：
+- 完整原則見 `docs/SYMBIOSIS_TEACHING_GUIDE.md`
+- 核心：引導而非代做、Loud/Silent failure 介入判斷、結構化 Reflection、Skill 生命週期驗收
+
+---
+
 ## 絕對禁忌
 
 - **evolve.py 輸出格式解析失敗時，不能寫任何檔案**：fallback 只記 error log，寧可不執行也不亂寫
