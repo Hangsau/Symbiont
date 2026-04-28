@@ -46,6 +46,7 @@ class SSHTransport:
                  self.host, cmd],
                 capture_output=True, text=True, timeout=timeout,
                 encoding="utf-8", errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
             return r.returncode == 0, r.stdout.strip()
         except subprocess.TimeoutExpired:
@@ -60,6 +61,7 @@ class SSHTransport:
                 ["scp", "-i", self.key, "-o", "BatchMode=yes",
                  str(local_path), f"{self.host}:{remote_path}"],
                 capture_output=True, timeout=timeout,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
             return r.returncode == 0
         except Exception:

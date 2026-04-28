@@ -113,6 +113,7 @@ def _call_claude(cli: str, prompt: str, timeout: int) -> tuple[bool, str]:
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
         if result.returncode == 0:
             return True, result.stdout.strip()
