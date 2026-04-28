@@ -121,6 +121,14 @@ if not exist "%AGENT_DIR%\data\state.json" echo {} > "%AGENT_DIR%\data\state.jso
 if not exist "%AGENT_DIR%\data\teaching_state" mkdir "%AGENT_DIR%\data\teaching_state"
 echo       完成
 
+REM ── 啟動 babysit daemon（若 agents.yaml 存在）────────────────────
+if exist "%AGENT_DIR%\data\agents.yaml" (
+    echo.
+    echo [啟動] babysit daemon 啟動中...
+    start "" /min python src\babysit.py --daemon
+    echo       babysit 已在背景執行
+)
+
 REM ── 完成 ─────────────────────────────────────────────────────────
 echo.
 echo ============================================================
