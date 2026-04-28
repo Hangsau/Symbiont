@@ -574,14 +574,20 @@ def main():
                                 default=TEACHING_TIMEOUT_SECONDS)
 
     if args.daemon:
-        print(f"[babysit] daemon 模式啟動，每 {DAEMON_INTERVAL_SECONDS} 秒執行一次")
         append_log(error_log, f"[babysit] daemon 啟動 {datetime.now(timezone.utc).isoformat()}")
         while True:
             try:
                 _run_once(dry_run, base_dir, cfg, error_log, lock_max_age, teaching_timeout)
+            except KeyboardInterrupt:
+                append_log(error_log, "[babysit] daemon 正常退出（KeyboardInterrupt）")
+                break
             except Exception as e:
                 append_log(error_log, f"[babysit] daemon 迭代例外: {e}")
-            time.sleep(DAEMON_INTERVAL_SECONDS)
+            try:
+                time.sleep(DAEMON_INTERVAL_SECONDS)
+            except KeyboardInterrupt:
+                append_log(error_log, "[babysit] daemon 正常退出（sleep 中斷）")
+                break
     else:
         _run_once(dry_run, base_dir, cfg, error_log, lock_max_age, teaching_timeout)
 
@@ -589,6 +595,13 @@ def main():
 if __name__ == "__main__":
     if sys.platform == "win32":
         import io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+        if sys.stdout is None:
+            # pythonw.exe 模式（無 console）：把 print 導向 daemon log
+            _stdout_log = Path(__file__).parent.parent / "data" / "daemon_stdout.log"
+            _stdout_log.parent.mkdir(parents=True, exist_ok=True)
+            sys.stdout = open(str(_stdout_log), "a", encoding="utf-8", errors="replace", buffering=1)
+            sys.stderr = sys.stdout
+        else:
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
     main()
