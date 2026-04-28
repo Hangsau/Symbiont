@@ -12,8 +12,13 @@ transport.py — Agent 通訊傳輸層抽象
 
 import os
 import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.file_ops import safe_write
 
 # ── 常數 ──────────────────────────────────────────────────────────
 
@@ -76,13 +81,19 @@ class SSHTransport:
             return None
         return out if out else None
 
-    def send_reply(self, content: str, outbox_remote: str, filename: str) -> bool:
+    def send_reply(self, content: str, outbox_remote: str, filename: str,
+                   max_retries: int = 3) -> bool:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
                                          delete=False, encoding="utf-8") as f:
             f.write(content)
             tmp = f.name
         try:
-            return self._scp_to(Path(tmp), f"{outbox_remote}{filename}")
+            for attempt in range(max_retries):
+                if self._scp_to(Path(tmp), f"{outbox_remote}{filename}"):
+                    return True
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+            return False
         finally:
             os.unlink(tmp)
 
@@ -122,8 +133,7 @@ class LocalTransport:
 
     def send_reply(self, content: str, _outbox_remote: str, filename: str) -> bool:
         self.outbox.mkdir(parents=True, exist_ok=True)
-        (self.outbox / filename).write_text(content, encoding="utf-8")
-        return True
+        return safe_write(self.outbox / filename, content)
 
     def list_dialogues(self, _dialogues_remote: str = "") -> list[str]:
         return []

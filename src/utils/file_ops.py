@@ -55,6 +55,22 @@ def append_log(path: Path | str, message: str, encoding: str = "utf-8") -> bool:
         return False
 
 
+def rotate_log(path: Path | str, max_lines: int = 2000) -> bool:
+    """log 超過 max_lines 時保留後半，捨棄前半。
+    原子操作（safe_write），不影響並發 append。
+    回傳 True 若有執行截斷。
+    """
+    content = safe_read(path)
+    if not content:
+        return False
+    lines = content.splitlines(keepends=True)
+    if len(lines) <= max_lines:
+        return False
+    keep = lines[len(lines) // 2:]
+    safe_write(path, "".join(keep))
+    return True
+
+
 class FileLock:
     """
     跨平台 file lock（使用 O_CREAT|O_EXCL，Windows 和 Unix 均支援）。

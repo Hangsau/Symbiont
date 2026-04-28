@@ -25,9 +25,9 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.utils.config_loader import load_config
+from src.utils.config_loader import load_config, get_int
 from src.utils.claude_runner import run_claude, check_auth
-from src.utils.file_ops import safe_read, safe_write, append_log
+from src.utils.file_ops import safe_read, safe_write, append_log, rotate_log
 from src.utils.transport import make_transport
 
 # ── 常數 ──────────────────────────────────────────────────────────
@@ -38,9 +38,30 @@ LOCK_MAX_AGE_SECONDS = 900       # 15 分鐘：超過視為崩潰遺留
 STATE_FILE = "data/babysit_state.json"
 LOG_FILE = "data/babysit.log"
 ERROR_LOG = "data/error.log"
+DEAD_LETTER_DIR = "data/failed_replies"
+DEAD_LETTER_MAX_RETRIES = 5      # dead letter 超過此次數後放棄
 
 NO_REPLY = "NO_REPLY_NEEDED"
 NEEDS_HUMAN = "NEEDS_HUMAN_REVIEW"
+
+
+# ── Sentinel 解析 ─────────────────────────────────────────────────
+
+def _parse_sentinel(response: str) -> str:
+    """解析 LLM 回應的 sentinel 類型。
+    只看第一行，避免後續說明文字干擾匹配。
+
+    Returns:
+        'goal_achieved' | 'needs_human' | 'no_reply' | 'reply'
+    """
+    first_line = response.strip().split("\n")[0]
+    if "GOAL_ACHIEVED" in first_line:
+        return "goal_achieved"
+    if first_line.startswith(NEEDS_HUMAN):
+        return "needs_human"
+    if first_line == NO_REPLY:
+        return "no_reply"
+    return "reply"
 
 DRY_RUN_PREVIEW_CHARS = 400      # dry-run prompt 預覽字數
 MAX_PROCESSED_INBOX_HISTORY = 200  # babysit_state.json 保留的已處理 inbox 檔名數
@@ -118,14 +139,15 @@ class TeachingState:
 
 # ── Lock 管理 ──────────────────────────────────────────────────────
 
-def _acquire_lock(base_dir: Path) -> bool:
+def _acquire_lock(base_dir: Path, lock_max_age: int = LOCK_MAX_AGE_SECONDS) -> bool:
     lock = base_dir / LOCK_FILE
+    lock.parent.mkdir(parents=True, exist_ok=True)
     if lock.exists():
         age = time.time() - lock.stat().st_mtime
-        if age < LOCK_MAX_AGE_SECONDS:
+        if age < lock_max_age:
             return False
         append_log(base_dir / ERROR_LOG,
-                   f"[babysit] lock 超過 {LOCK_MAX_AGE_SECONDS}s，強制刪除（上次可能崩潰）")
+                   f"[babysit] lock 超過 {lock_max_age}s，強制刪除（上次可能崩潰）")
         lock.unlink(missing_ok=True)
     lock.write_text(str(datetime.now(timezone.utc).isoformat()))
     return True
@@ -133,6 +155,67 @@ def _acquire_lock(base_dir: Path) -> bool:
 
 def _release_lock(base_dir: Path) -> None:
     (base_dir / LOCK_FILE).unlink(missing_ok=True)
+
+
+# ── Dead Letter Queue ─────────────────────────────────────────────
+
+def _write_dead_letter(base_dir: Path, agent_name: str,
+                        outbox_remote: str, filename: str, content: str) -> None:
+    """SCP 失敗時將訊息寫入 dead letter queue，等下次 babysit 重試。"""
+    dl_dir = base_dir / DEAD_LETTER_DIR
+    dl_dir.mkdir(parents=True, exist_ok=True)
+    dl_path = dl_dir / f"{agent_name}_{filename}.json"
+    data = {
+        "agent": agent_name,
+        "outbox_remote": outbox_remote,
+        "filename": filename,
+        "content": content,
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "retry_count": 0,
+    }
+    try:
+        dl_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        print(f"[{agent_name}] dead letter write failed: {e}", file=sys.stderr)
+
+
+def _flush_dead_letters(base_dir: Path, agent_name: str, transport,
+                         error_log: Path, dry_run: bool) -> None:
+    """嘗試重送 dead letter queue 中的失敗訊息。在 ping 成功後、正常處理前呼叫。"""
+    dl_dir = base_dir / DEAD_LETTER_DIR
+    if not dl_dir.exists():
+        return
+
+    for dl_path in sorted(dl_dir.glob(f"{agent_name}_*.json")):
+        try:
+            data = json.loads(dl_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            dl_path.unlink(missing_ok=True)
+            continue
+
+        if dry_run:
+            print(f"[{agent_name}] dead letter (dry-run): {dl_path.name} "
+                  f"(retry #{data.get('retry_count', 0)})")
+            continue
+
+        ok = transport.send_reply(data["content"], data["outbox_remote"], data["filename"])
+        if ok:
+            dl_path.unlink(missing_ok=True)
+            append_log(base_dir / LOG_FILE,
+                       f"[{agent_name}] dead letter 補送成功：{data['filename']}")
+        else:
+            data["retry_count"] = data.get("retry_count", 0) + 1
+            if data["retry_count"] >= DEAD_LETTER_MAX_RETRIES:
+                append_log(error_log,
+                           f"[{agent_name}] dead letter 超過 {DEAD_LETTER_MAX_RETRIES} 次重試，"
+                           f"放棄：{data['filename']}")
+                dl_path.unlink(missing_ok=True)
+            else:
+                try:
+                    dl_path.write_text(json.dumps(data, indent=2, ensure_ascii=False),
+                                       encoding="utf-8")
+                except OSError:
+                    pass
 
 
 # ── State I/O ─────────────────────────────────────────────────────
@@ -271,22 +354,24 @@ def _process_inbox(agent_name: str, agent_cfg: dict, transport,
         append_log(base_dir / ERROR_LOG, f"[{agent_name}] claude -p 失敗，跳過 {target}")
         return all_state
 
-    if response.strip() == NO_REPLY:
+    sentinel = _parse_sentinel(response)
+    if sentinel == "no_reply":
         append_log(base_dir / LOG_FILE, f"[{agent_name}] {target} → NO_REPLY_NEEDED")
-    elif response.strip().startswith(NEEDS_HUMAN):
+    elif sentinel == "needs_human":
         append_log(base_dir / LOG_FILE,
                    f"[{agent_name}] {target} → {response.strip()[:120]}")
         print(f"⚠️  [{agent_name}] 需要人工介入：{response.strip()}")
     else:
         ts = int(time.time())
         filename = f"babysit_{ts}.txt"
-        ok = transport.send_reply(f"generated_by: babysit-{ts}\n\n{response}",
-                                   outbox_remote, filename)
+        content_to_send = f"generated_by: babysit-{ts}\n\n{response}"
+        ok = transport.send_reply(content_to_send, outbox_remote, filename)
         if ok:
             append_log(base_dir / LOG_FILE, f"[{agent_name}] 回應已送出 → {filename}")
             agent_state.last_reply_ts = float(ts)
         else:
             append_log(base_dir / ERROR_LOG, f"[{agent_name}] SCP 失敗：{filename}")
+            _write_dead_letter(base_dir, agent_name, outbox_remote, filename, content_to_send)
 
     processed.add(target)
     agent_state.processed_inbox = list(processed)[-MAX_PROCESSED_INBOX_HISTORY:]
@@ -297,7 +382,8 @@ def _process_inbox(agent_name: str, agent_cfg: dict, transport,
 # ── 主要邏輯：教學 loop ───────────────────────────────────────────
 
 def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
-                            cfg: dict, dry_run: bool, base_dir: Path) -> None:
+                            cfg: dict, dry_run: bool, base_dir: Path,
+                            teaching_timeout: int = TEACHING_TIMEOUT_SECONDS) -> None:
     """若 TEACHING_STATE 為 active/waiting_reply，查回應並送下一問。"""
     ts_file = agent_cfg.get("teaching_state_file", f"data/teaching_state/{agent_name}.json")
     teaching = _load_teaching_state(base_dir, ts_file)
@@ -316,7 +402,7 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
     latest = dialogues[0]
     if latest == teaching.last_processed_dialogue:
         # 無新回應：逾時檢查
-        if (time.time() - teaching.last_sent_ts > TEACHING_TIMEOUT_SECONDS
+        if (time.time() - teaching.last_sent_ts > teaching_timeout
                 and teaching.status != "timeout_warning"):
             ts = int(time.time())
             confirm_msg = (f"generated_by: babysit-{ts}\n\n"
@@ -356,7 +442,8 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
         append_log(base_dir / ERROR_LOG, f"[{agent_name}] teaching loop: claude -p 失敗")
         return
 
-    if response.strip() == "GOAL_ACHIEVED":
+    sentinel = _parse_sentinel(response)
+    if sentinel == "goal_achieved":
         teaching.status = "completed"
         teaching.completed_at = datetime.now(timezone.utc).isoformat()
         teaching.completion_summary = "目標達成"
@@ -366,7 +453,7 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
         print(f"🎓 [{agent_name}] 教學目標達成！")
         return
 
-    if response.strip().startswith(NEEDS_HUMAN):
+    if sentinel == "needs_human":
         teaching.status = "needs_review"
         teaching.last_processed_dialogue = latest
         _save_teaching_state(base_dir, ts_file, teaching, dry_run)
@@ -377,8 +464,8 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
 
     ts = int(time.time())
     filename = f"babysit_{ts}_teach.txt"
-    ok = transport.send_reply(f"generated_by: babysit-{ts}\n\n{response}",
-                               outbox_remote, filename)
+    content_to_send = f"generated_by: babysit-{ts}\n\n{response}"
+    ok = transport.send_reply(content_to_send, outbox_remote, filename)
     if ok:
         teaching.current_round += 1
         teaching.last_sent_ts = float(ts)
@@ -390,6 +477,7 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
                    f"[{agent_name}] teaching loop: Round {teaching.current_round} 送出")
     else:
         append_log(base_dir / ERROR_LOG, f"[{agent_name}] teaching loop: SCP 失敗")
+        _write_dead_letter(base_dir, agent_name, outbox_remote, filename, content_to_send)
 
 
 # ── 主程式 ────────────────────────────────────────────────────────
@@ -404,6 +492,16 @@ def main():
     base_dir = Path(__file__).parent.parent
     cfg = load_config()
     error_log = base_dir / ERROR_LOG
+
+    # log rotation（每次啟動時截斷，防止無限增長）
+    rotate_log(error_log, max_lines=2000)
+    rotate_log(base_dir / LOG_FILE, max_lines=5000)
+
+    # 從 config 讀取可覆蓋的常數（向後相容：config 缺少時用模組預設值）
+    lock_max_age = get_int(cfg, "babysit", "lock_max_age_seconds",
+                           default=LOCK_MAX_AGE_SECONDS)
+    teaching_timeout = get_int(cfg, "babysit", "teaching_timeout_seconds",
+                                default=TEACHING_TIMEOUT_SECONDS)
 
     if not check_auth():
         append_log(error_log, "[babysit] auth check failed，跳過")
@@ -428,7 +526,7 @@ def main():
         print("[babysit] 沒有啟用的 agent，結束")
         sys.exit(0)
 
-    if not dry_run and not _acquire_lock(base_dir):
+    if not dry_run and not _acquire_lock(base_dir, lock_max_age):
         print("[babysit] 上一次執行仍在進行，跳過")
         sys.exit(0)
 
@@ -448,6 +546,9 @@ def main():
                 print(f"[{agent_name}] ❌ 連線失敗，跳過")
                 continue
 
+            # dead letter 補送（在處理新訊息之前）
+            _flush_dead_letters(base_dir, agent_name, transport, error_log, dry_run)
+
             all_state = _process_inbox(
                 agent_name, agent_cfg, transport,
                 all_state, cfg, dry_run, base_dir,
@@ -455,6 +556,7 @@ def main():
             _process_teaching_loop(
                 agent_name, agent_cfg, transport,
                 cfg, dry_run, base_dir,
+                teaching_timeout=teaching_timeout,
             )
 
         _save_json_state(base_dir / STATE_FILE, all_state, dry_run, label="babysit state")

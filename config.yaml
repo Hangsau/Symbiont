@@ -79,3 +79,7 @@ memory_audit:
 
 evolve:
   distill_threshold: 25            # existing rules + new rules >= 此數觸發蒸餾；0 = 停用
+
+babysit:
+  teaching_timeout_seconds: 1800   # teaching loop 等待 agent 回應的逾時（秒）
+  lock_max_age_seconds: 900        # babysit.lock 超過此秒視為崩潰遺留，強制刪除

@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.config_loader import load_config, get_path, get_int, get_str
 from src.utils.session_reader import parse_session, find_latest_session, find_session_by_uuid
 from src.utils.claude_runner import run_claude, check_auth
-from src.utils.file_ops import safe_read, safe_write, append_log, FileLock
+from src.utils.file_ops import safe_read, safe_write, append_log, FileLock, rotate_log
 
 
 # ── 常數 ──────────────────────────────────────────────────────────
@@ -230,28 +230,16 @@ def _validate_output(data: dict) -> bool:
 # ── CLAUDE.md 更新 ────────────────────────────────────────────────
 
 def _append_rules_to_claude_md(existing: str, rules: list[dict]) -> str:
-    """將新規則追加到 CLAUDE.md 的「自動學習規則」section。"""
+    """將新規則追加到 CLAUDE.md 的「自動學習規則」section。
+    使用 _find_section_bounds 統一定位邏輯，與 _replace_section_rules 保持一致。
+    """
     if not rules:
         return existing
 
     new_bullets = "\n".join(r["content"] for r in rules)
+    bounds = _find_section_bounds(existing)
 
-    if EVOLVE_SECTION_TITLE in existing:
-        # 已有 section → 在 section 末尾插入
-        idx = existing.index(EVOLVE_SECTION_TITLE)
-        # 找下一個 ## section 或檔案結尾（從 header 結尾後開始搜尋）
-        next_section = existing.find("\n## ", idx + len(EVOLVE_SECTION_HEADER))
-        if next_section == -1:
-            return existing.rstrip() + "\n" + new_bullets + "\n"
-        else:
-            return (
-                existing[:next_section].rstrip()
-                + "\n"
-                + new_bullets
-                + "\n"
-                + existing[next_section:]
-            )
-    else:
+    if bounds is None:
         # 沒有 section → 追加到末尾
         return (
             existing.rstrip()
@@ -260,6 +248,19 @@ def _append_rules_to_claude_md(existing: str, rules: list[dict]) -> str:
             + new_bullets
             + "\n"
         )
+
+    start, end = bounds
+    # 取出 section 內現有 bullets（header 之後到 section 結尾），rstrip 去除尾端空行
+    existing_bullets = existing[start + len(EVOLVE_SECTION_HEADER):end].rstrip()
+    return (
+        existing[:start]
+        + EVOLVE_SECTION_HEADER
+        + existing_bullets
+        + "\n"
+        + new_bullets
+        + "\n"
+        + existing[end:]
+    )
 
 
 # ── M6 蒸餾：輔助函式 ────────────────────────────────────────────
@@ -461,6 +462,7 @@ def run(dry_run: bool = False, skip_if_wrap_done: bool = False) -> int:
     """主流程。回傳 exit code（0=成功，1=失敗/無需處理）。"""
     cfg = load_config()
     error_log = get_path(cfg, "error_log")
+    rotate_log(error_log, max_lines=2000)
     state_path = get_path(cfg, "state_file")
     pending_path = get_path(cfg, "pending_evolve")
     evolution_log_path = get_path(cfg, "evolution_log")
