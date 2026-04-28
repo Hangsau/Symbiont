@@ -4,8 +4,6 @@
 
 A local Python daemon that keeps Claude's memory healthy, extracts behavioral rules from sessions, and maintains ongoing conversations with AI agents — all running automatically in the background.
 
-*(Repository name: `local-agent`)*
-
 ---
 
 ## Who is this for?
@@ -78,13 +76,11 @@ Claude Code sessions are ephemeral. Every session ends, the context is gone. Wit
 
 ### The Reflection Loop
 
-A key architectural property: `claude -p` subprocess calls create `.jsonl` session files under `~/.claude/projects/`. Since `evolve.py` scans all projects recursively, **babysit.py's conversations with agents are automatically included in the rule-extraction pipeline** — no additional wiring needed.
-
 Both sides reflect independently:
-- **Claude's side**: `evolve.py` extracts interaction patterns → `CLAUDE.md`
+- **Claude's side**: `evolve.py` scans human↔Claude sessions → extracts behavioral rules → `CLAUDE.md`
 - **Agent's side**: `dialogue-review` cron reads conversation history → agent's `MEMORY.md`
 
-> **Design decision**: `babysit.py` sessions are not treated as reflection targets. Reflection is for human↔Claude interaction patterns. Agent↔Claude interactions are the *subject matter* of the work, not the work style being optimized.
+> **Design decision**: `babysit.py`-generated `claude -p` sessions are intentionally excluded from the evolve pipeline. Reflection targets human↔Claude interaction patterns — agent↔Claude exchanges are the *subject matter* of the work, not the work style being optimized.
 
 ---
 
@@ -284,7 +280,7 @@ All LLM calls go through `claude -p` (Claude Code CLI), which runs on your exist
 
 | Module | LLM calls | Tokens per call | When |
 |--------|-----------|-----------------|------|
-| `evolve.py` | 1 per session | ~3k–8k input | After each Claude Code session ends |
+| `evolve.py` | 1–2 per session | ~3k–8k input | After each Claude Code session ends (2 calls when rule distillation triggers) |
 | `memory_audit.py` | **0** | — | File operations only |
 | `babysit.py` | 1 per agent message | ~1k–3k input | Only when agent sends a new message |
 
@@ -301,7 +297,8 @@ All LLM calls go through `claude -p` (Claude Code CLI), which runs on your exist
 ## Known Limitations
 
 - **Requires machine to be on** — Task Scheduler and the 2-minute babysit cycle only run while your computer is awake. For 24/7 coverage, run Symbiont on an always-on machine or VM.
-- **`~/.claude/CLAUDE.md` rules accumulate** — `evolve.py` only appends rules, never removes them. Periodically review and prune the `## 自動學習規則` section manually. Rule distillation (auto-consolidation when the section grows too large) is planned.
+- **`~/.claude/CLAUDE.md` rules accumulate** — `evolve.py` appends rules each session. Once the rule count reaches the configured threshold (default: 25), it automatically distills the section — merging overlapping rules and removing redundant ones — before appending new ones. You can also prune manually at any time.
+- **`babysit.py` requires a compatible agent** — The babysit module expects agents to communicate via a specific directory protocol (`for-claude/`, `claude-inbox/`, `claude-dialogues/`). Out of the box, only agents built on [Hermes](https://github.com/NousResearch/hermes-agent) use this layout. Other agent frameworks (LangChain, AutoGen, custom scripts) would need to implement the same mailbox structure to integrate. `evolve.py` and `memory_audit.py` have no such dependency — they work for any Claude Code user.
 
 ---
 
