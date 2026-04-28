@@ -150,7 +150,6 @@ type: local        # Same filesystem (Docker volumes, WSL2, local agents)
 
 - Python 3.10+
 - Claude Code CLI installed and authenticated (`claude --version`)
-- Windows (Task Scheduler) or Mac (launchd) for scheduling
 
 ### Install
 
@@ -161,24 +160,41 @@ Or manually:
 ```bash
 git clone https://github.com/Hangsau/Symbiont
 cd Symbiont
-
-# Windows
-setup/setup_windows.bat
+pip install -r requirements.txt
 
 # Verify
 python src/evolve.py --dry-run
 ```
 
-The setup script registers the Claude Code Stop hook and creates the Task Scheduler tasks for `evolve.py` and `memory_audit.py`.
+**Then choose a scheduling method:**
 
-### Enable memory audit
+#### Option A — Task Scheduler (Windows, requires admin)
 
-Tell Claude: *"Enable Symbiont memory system"*
+```bat
+setup/setup_windows.bat
+```
+
+Registers the Stop hook and creates Task Scheduler tasks for `evolve.py`, `memory_audit.py`, and `babysit.py` (every 2 minutes).
+
+#### Option B — Daemon mode (no admin required)
+
+```bat
+# Run once; keeps polling every 120 seconds until you close it
+python src/babysit.py --daemon
+```
+
+To auto-start on login, copy `run_babysit_daemon.bat` to your Windows Startup folder:
+
+```
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\
+```
+
+For `evolve.py` and `memory_audit.py`, the Stop hook alone is sufficient — they run automatically when Claude Code sessions end.
 
 ### Enable babysit
 
 1. Copy `data/agents.example.yaml` → `data/agents.yaml` and fill in your agent's connection details
-2. Tell Claude: *"Enable babysit"*
+2. Run babysit (Option A or B above) — it picks up `agents.yaml` automatically
 
 **Connecting a Hermes agent for the first time?** Tell Claude: *"Help me connect my Hermes agent to Symbiont"* — Claude will read `docs/CHANNEL_PROTOCOL.md` and walk through the full setup including the inbox-watcher, extract_dialogue.py, and end-to-end verification.
 
@@ -207,8 +223,9 @@ Symbiont/
 │   ├── CHANNEL_PROTOCOL.md    # Hermes agent channel setup + known pitfalls
 │   └── MEMORY_SCHEMA.md       # Memory file format specification
 ├── data/
-│   └── agents.example.yaml    # Agent registry template
+│   └── agents.example.yaml    # Agent registry template (copy → agents.yaml)
 ├── config.yaml                # All paths and thresholds
+├── run_babysit_daemon.bat     # Non-admin daemon launcher (Windows Startup folder)
 └── PLAN.md                    # Architecture decisions and milestone history
 ```
 
@@ -229,11 +246,14 @@ claude_runner:
   timeout_seconds: 120
   max_retries: 2
 
+memory_audit:
+  enabled: false   # set to true to activate
+
 evolve:
   distill_threshold: 25   # rule count that triggers distillation; 0 = disabled
 ```
 
-On Windows, if `claude -p` fails in background processes, set `claude_cli` to the full `.cmd` path — `claude_runner.py` resolves it to `node + cli.js` automatically.
+On Windows, if `claude -p` fails in background processes, `claude_runner.py` automatically resolves the CLI to its native `.exe` — no manual path configuration needed.
 
 ---
 

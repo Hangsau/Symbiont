@@ -482,53 +482,38 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
 
 # ── 主程式 ────────────────────────────────────────────────────────
 
-def main():
-    parser = argparse.ArgumentParser(description="babysit.py — Agent 協作自動化")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="預覽模式：不送訊息、不寫狀態")
-    args = parser.parse_args()
-    dry_run = args.dry_run
+DAEMON_INTERVAL_SECONDS = 120
 
-    base_dir = Path(__file__).parent.parent
-    cfg = load_config()
-    error_log = base_dir / ERROR_LOG
 
-    # log rotation（每次啟動時截斷，防止無限增長）
-    rotate_log(error_log, max_lines=2000)
-    rotate_log(base_dir / LOG_FILE, max_lines=5000)
-
-    # 從 config 讀取可覆蓋的常數（向後相容：config 缺少時用模組預設值）
-    lock_max_age = get_int(cfg, "babysit", "lock_max_age_seconds",
-                           default=LOCK_MAX_AGE_SECONDS)
-    teaching_timeout = get_int(cfg, "babysit", "teaching_timeout_seconds",
-                                default=TEACHING_TIMEOUT_SECONDS)
-
+def _run_once(dry_run: bool, base_dir: Path, cfg: dict,
+              error_log: Path, lock_max_age: int, teaching_timeout: int) -> None:
+    """一次完整執行（可被 daemon loop 或 Task Scheduler 直接呼叫）"""
     if not check_auth():
         append_log(error_log, "[babysit] auth check failed，跳過")
-        sys.exit(0)
+        return
 
     agents_file = base_dir / "data/agents.yaml"
     if not agents_file.exists():
         print(f"[babysit] agents.yaml 不存在：{agents_file}")
-        sys.exit(0)
+        return
 
     try:
         with open(agents_file, encoding="utf-8") as f:
             agents_cfg = yaml.safe_load(f)
     except Exception as e:
         append_log(error_log, f"[babysit] 無法解析 agents.yaml: {e}")
-        sys.exit(0)
+        return
 
     agents = agents_cfg.get("agents", {})
     enabled_agents = {k: v for k, v in agents.items() if v.get("enabled", False)}
 
     if not enabled_agents:
         print("[babysit] 沒有啟用的 agent，結束")
-        sys.exit(0)
+        return
 
     if not dry_run and not _acquire_lock(base_dir, lock_max_age):
         print("[babysit] 上一次執行仍在進行，跳過")
-        sys.exit(0)
+        return
 
     try:
         all_state = _load_json_state(base_dir / STATE_FILE, {})
@@ -546,7 +531,6 @@ def main():
                 print(f"[{agent_name}] ❌ 連線失敗，跳過")
                 continue
 
-            # dead letter 補送（在處理新訊息之前）
             _flush_dead_letters(base_dir, agent_name, transport, error_log, dry_run)
 
             all_state = _process_inbox(
@@ -566,6 +550,40 @@ def main():
             _release_lock(base_dir)
 
     print("\n[babysit] 完成")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="babysit.py — Agent 協作自動化")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="預覽模式：不送訊息、不寫狀態")
+    parser.add_argument("--daemon", action="store_true",
+                        help=f"持續執行模式：每 {DAEMON_INTERVAL_SECONDS} 秒觸發一次，直到手動終止")
+    args = parser.parse_args()
+    dry_run = args.dry_run
+
+    base_dir = Path(__file__).parent.parent
+    cfg = load_config()
+    error_log = base_dir / ERROR_LOG
+
+    rotate_log(error_log, max_lines=2000)
+    rotate_log(base_dir / LOG_FILE, max_lines=5000)
+
+    lock_max_age = get_int(cfg, "babysit", "lock_max_age_seconds",
+                           default=LOCK_MAX_AGE_SECONDS)
+    teaching_timeout = get_int(cfg, "babysit", "teaching_timeout_seconds",
+                                default=TEACHING_TIMEOUT_SECONDS)
+
+    if args.daemon:
+        print(f"[babysit] daemon 模式啟動，每 {DAEMON_INTERVAL_SECONDS} 秒執行一次")
+        append_log(error_log, f"[babysit] daemon 啟動 {datetime.now(timezone.utc).isoformat()}")
+        while True:
+            try:
+                _run_once(dry_run, base_dir, cfg, error_log, lock_max_age, teaching_timeout)
+            except Exception as e:
+                append_log(error_log, f"[babysit] daemon 迭代例外: {e}")
+            time.sleep(DAEMON_INTERVAL_SECONDS)
+    else:
+        _run_once(dry_run, base_dir, cfg, error_log, lock_max_age, teaching_timeout)
 
 
 if __name__ == "__main__":

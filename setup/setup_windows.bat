@@ -74,9 +74,9 @@ schtasks /Query /TN "symbiont-evolve" >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     schtasks /Delete /TN "symbiont-evolve" /F >nul 2>&1
 )
-schtasks /Create /TN "symbiont-evolve" /TR "%EVOLVE_CMD%" /SC ONSTART /DELAY 0002:00 /F >nul
+schtasks /Create /TN "symbiont-evolve" /TR "%EVOLVE_CMD%" /SC ONLOGON /DELAY 0002:00 /RU "%USERNAME%" /F >nul
 if %ERRORLEVEL% EQU 0 (
-    echo       symbiont-evolve 已設定（開機後 2 分鐘補跑）
+    echo       symbiont-evolve 已設定（登入後 2 分鐘補跑）
 ) else (
     echo [警告] symbiont-evolve Task Scheduler 設定失敗（可手動執行）
 )
@@ -88,16 +88,16 @@ schtasks /Query /TN "symbiont-memory-audit" >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     schtasks /Delete /TN "symbiont-memory-audit" /F >nul 2>&1
 )
-schtasks /Create /TN "symbiont-memory-audit" /TR "%AUDIT_CMD%" /SC ONSTART /DELAY 0002:30 /F >nul
+schtasks /Create /TN "symbiont-memory-audit" /TR "%AUDIT_CMD%" /SC ONLOGON /DELAY 0002:30 /RU "%USERNAME%" /F >nul
 if %ERRORLEVEL% EQU 0 (
-    echo       symbiont-memory-audit 已設定（開機後 2.5 分鐘補跑）
+    echo       symbiont-memory-audit 已設定（登入後 2.5 分鐘補跑）
 ) else (
     echo [警告] symbiont-memory-audit Task Scheduler 設定失敗（可手動執行）
 )
 
 REM babysit 每 2 分鐘（若 agents.yaml 存在才設定）
 if exist "%AGENT_DIR%\data\agents.yaml" (
-    set "BABYSIT_CMD=cmd /c cd /d \"%AGENT_DIR%\" ^& python src\babysit.py"
+    set "BABYSIT_CMD=wscript //B \"%AGENT_DIR%\run_silent.vbs\" babysit"
     schtasks /Query /TN "symbiont-babysit" >nul 2>&1
     if %ERRORLEVEL% EQU 0 (
         schtasks /Delete /TN "symbiont-babysit" /F >nul 2>&1
@@ -126,11 +126,12 @@ echo.
 echo ============================================================
 echo  安裝完成！
 echo.
-echo  下一步（選擇性）：
-echo    啟用 memory 系統 → 告訴 Claude「幫我啟用 memory 系統」
-echo    啟用 babysit     → 告訴 Claude「幫我啟用 babysit」
-echo    立即執行 evolve  → python src\evolve.py --dry-run
-echo    查看操作手冊    → docs\COMMANDS.md
+echo  下一步：
+echo    編輯 config.yaml 啟用功能：
+echo      memory_audit.enabled: true    ← 啟用每日記憶維護
+echo    複製 data\agents.example.yaml → data\agents.yaml 填入 agent 設定
+echo    立即驗證 → python src\evolve.py --dry-run
+echo    查看操作手冊 → docs\COMMANDS.md
 echo ============================================================
 echo.
 pause

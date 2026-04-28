@@ -60,21 +60,29 @@ def _resolve_cmd(cli: str) -> list[str]:
     cli_path = Path(cli)
 
     if sys.platform == "win32":
-        # Windows：.cmd wrapper 不能被 subprocess 直接執行
-        if cli_path.suffix.lower() == ".cmd" and cli_path.exists():
-            npm_dir = cli_path.parent
-            cli_js_candidates = [
-                npm_dir / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js",
-            ]
-            node_exe_candidates = [
-                Path(r"C:\Program Files\nodejs\node.exe"),
-                Path(r"C:\Program Files (x86)\nodejs\node.exe"),
-                npm_dir / "node.exe",
-            ]
-            node_exe = next((p for p in node_exe_candidates if p.exists()), None)
-            cli_js = next((p for p in cli_js_candidates if p.exists()), None)
-            if node_exe and cli_js:
-                return [str(node_exe), str(cli_js)]
+        # 若 config 給了絕對路徑且存在，直接用
+        if cli_path.is_absolute() and cli_path.exists():
+            return [str(cli_path)]
+
+        # 自動偵測：npm global node_modules（使用 ~ 展開，不寫死用戶名）
+        npm_bin = Path.home() / "AppData" / "Roaming" / "npm"
+
+        # 優先：native EXE（claude-code 較新版本）
+        exe = npm_bin / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
+        if exe.exists():
+            return [str(exe)]
+
+        # Fallback：node.exe + cli.js（舊版或其他安裝方式）
+        cli_js = npm_bin / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+        node_candidates = [
+            Path(r"C:\Program Files\nodejs\node.exe"),
+            Path(r"C:\Program Files (x86)\nodejs\node.exe"),
+            npm_bin / "node.exe",
+        ]
+        node_exe = next((p for p in node_candidates if p.exists()), None)
+        if node_exe and cli_js.exists():
+            return [str(node_exe), str(cli_js)]
+
         return [cli]
 
     # Mac / Linux：cli 若直接可執行就用，否則掃常見路徑
