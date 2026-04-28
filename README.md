@@ -39,37 +39,37 @@ You'll get the most out of Symbiont if you:
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
+┌───────────────────────────────────────────────────────────────────┐
 │                     YOUR COMPUTER (Symbiont)                      │
 │                                                                   │
 │  Claude Code session ends                                         │
 │       │                                                           │
 │       ▼ Stop hook (30s delay)                                     │
-│  evolve.py  ──────────────────────────►  ~/.claude/CLAUDE.md     │
+│  evolve.py  ──────────────────────────►  ~/.claude/CLAUDE.md      │
 │  (reads ~/.claude/projects/**/*.jsonl)    (behavioral rules)      │
 │                                                                   │
-│  memory/*.md  ──────────────►  memory_audit.py                   │
+│  memory/*.md  ──────────────►  memory_audit.py                    │
 │  (review_by dates)              │                                 │
 │                                 ▼                                 │
 │                           memory/archive/                         │
 │                                                                   │
-│  agents.yaml  ──────────►  babysit.py  ──  claude -p             │
+│  agents.yaml  ──────────►  babysit.py  ──  claude -p              │
 │  (agent registry)           │                                     │
 └─────────────────────────────┼─────────────────────────────────────┘
                               │ SSH/SCP  (or local file I/O)
                               ▼
-┌─────────────────────────────────────────────┐
+┌──────────────────────────────────────────────┐
 │         AGENT MACHINE (VM / Docker / local)  │
 │                                              │
-│  inbox-watcher ◄── claude-inbox/            │
+│  inbox-watcher ◄── claude-inbox/             │
 │       │              (Claude's replies)      │
 │       ▼                                      │
 │  hermes cron session                         │
 │       │                                      │
 │       ▼ extract_dialogue.py                  │
-│  claude-dialogues/  ──► babysit.py reads    │
+│  claude-dialogues/  ──► babysit.py reads     │
 │                                              │
-│  for-claude/        ──► babysit.py reads    │
+│  for-claude/        ──► babysit.py reads     │
 │  (agent-initiated messages)                  │
 └──────────────────────────────────────────────┘
 ```
