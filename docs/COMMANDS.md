@@ -22,18 +22,30 @@
 **用戶說**：「幫我啟用 babysit」或「啟用 agent 保母」
 
 **Claude 執行**：
-1. 確認 `data/agents.yaml` 存在（若不存在，從 `data/agents.yaml` 範本建立）
+1. 確認 `data/agents.yaml` 存在（若不存在，從 `data/agents.example.yaml` 複製並填入設定）
 2. 確認 `data/agents.yaml` 的 agent 設定正確（ssh_key、ssh_host、inbox_remote 等）
-3. 設定 Task Scheduler：
-   ```bash
-   schtasks /Create /TN "Symbiont-babysit" \
-     /TR "cmd /c cd /d \"[Symbiont路徑]\" & python src\babysit.py" \
-     /SC MINUTE /MO 2 /F
+3. 啟動 daemon（Windows）：
+   ```powershell
+   # 找到 pythonw.exe 路徑（通常在此）
+   $pw = "$env:LOCALAPPDATA\Programs\Python\Python312\pythonw.exe"
+   # 啟動無視窗常駐 daemon
+   Start-Process $pw -ArgumentList "src\babysit.py","--daemon" -WorkingDirectory "[Symbiont路徑]"
    ```
-4. 驗證：`python src/babysit.py --dry-run`
+4. 設定開機自動啟動：將以下內容存成 `start-babysit.bat`，放入 Windows Startup 資料夾（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`）：
+   ```batch
+   @echo off
+   set "PYTHONW=[pythonw.exe 完整路徑]"
+   cd /d "[Symbiont路徑]"
+   start "" "%PYTHONW%" src\babysit.py --daemon
+   ```
+5. 驗證（等 10 秒後查 log）：
+   ```bash
+   tail -3 data/error.log   # 應看到 [babysit] daemon 啟動 ...
+   ```
 
 > **注意**：babysit 需要電腦開著才能執行。如需 24/7，考慮移至 VM。
 > **SSH key**：確認 `~/.ssh/id_ed25519` 存在，且可連線至 agent 所在主機。
+> **pythonw.exe**：使用 pythonw 而非 python，才能在背景執行不出現 console 視窗。
 
 ---
 
@@ -42,8 +54,11 @@
 **用戶說**：「停用 babysit」或「關閉 agent 保母」
 
 **Claude 執行**：
-```bash
-schtasks /Delete /TN "Symbiont-babysit" /F
+```powershell
+# 停止正在執行的 daemon
+Get-Process -Name "pythonw" -ErrorAction SilentlyContinue | Stop-Process -Force
+# 移除開機自動啟動（若有設定）
+Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\start-babysit.bat" -ErrorAction SilentlyContinue
 ```
 
 ---

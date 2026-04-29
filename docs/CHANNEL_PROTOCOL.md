@@ -31,12 +31,12 @@ Three directories, each with a distinct role:
 
 ```bash
 # SSH into the agent machine, then:
-mkdir -p ~/.hermes/for-claude/<agent_name>
+mkdir -p ~/.hermes/for-claude/archive
 mkdir -p ~/.hermes/claude-inbox
 mkdir -p ~/.hermes/claude-dialogues
 ```
 
-Replace `<agent_name>` with the name in `data/agents.yaml` (e.g. `talos`).
+**Important**: `babysit.py` reads from `for-claude/archive/`, not `for-claude/` directly. The for-claude watcher (Step 4) must move/copy incoming files into `archive/` immediately after they are written. Reading from the root `for-claude/` directory will always return empty results.
 
 ---
 
@@ -120,19 +120,25 @@ Files in `for-claude/` that contain only the agent's message (no `**Claude:**` b
 
 ## Step 5 — Configure agents.yaml
 
+Copy `data/agents.example.yaml` → `data/agents.yaml` and fill in your settings:
+
 ```yaml
 agents:
-  - name: my-agent
+  my_agent:                          # key = agent name (no dashes)
     enabled: true
-    type: remote_ssh          # or "local" for same-machine agents
-    ssh_host: user@<ip>
-    ssh_key: ~/.ssh/id_ed25519
-    inbox_remote: /home/user/.hermes/claude-inbox
-    dialogues_remote: /home/user/.hermes/claude-dialogues
-    for_claude_remote: /home/user/.hermes/for-claude/my-agent
+    type: remote_ssh                 # or "local" for same-machine agents
+    ssh_key: "~/.ssh/id_ed25519"
+    ssh_host: "user@<ip>"
+    inbox_remote: "~/.hermes/for-claude/archive/"   # NOTE: archive/ subdirectory
+    outbox_remote: "~/.hermes/claude-inbox/"
+    dialogues_remote: "~/.hermes/claude-dialogues/"
+    teaching_state_file: "data/teaching_state/my_agent.json"
+    cooldown_seconds: 600
     system_context: |
-      You are helping an AI agent learn. Ask guiding questions, don't give answers.
+      [See agents.example.yaml for the full recommended system_context template]
 ```
+
+> **`inbox_remote` must point to `archive/`**, not the parent `for-claude/` directory. The watcher archives files there immediately; reading the root will always return nothing.
 
 ---
 
