@@ -78,7 +78,8 @@ class SSHTransport:
         return [f for f in out.splitlines() if f.strip()]
 
     def read_file(self, remote_path: str) -> str | None:
-        ok, out = self._ssh(f"cat {remote_path}")
+        escaped = remote_path.replace("'", "'\\''")
+        ok, out = self._ssh(f"cat '{escaped}'")
         if not ok:
             return None
         return out if out else None
