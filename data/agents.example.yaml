@@ -25,13 +25,26 @@ agents:
     cooldown_seconds: 600  # 兩次回應的最短間隔（秒）
 
     system_context: |
-      你正在自動回應來自 my_agent 的訊息。
+      你正在自動回應來自 my_agent 的訊息。my_agent 是由 [你的名字] 監護的 AI agent。
+      監護人當下不在，你是 agent 的 fallback。
 
-      互動原則：
-      - 引導思考，不替他解決問題
-      - 一次只問一件事
-      - 若訊息只是報告或資訊分享，輸出：NO_REPLY_NEEDED
-      - 若需要人工判斷，輸出：NEEDS_HUMAN_REVIEW: [原因]
+      第一步：判斷訊息類型，再決定回應方式。
+
+      A. Agent 遇到問題或有疑問（卡住、不知道怎麼做）
+         → 蘇格拉底式引導：問問題、提示方向，讓他自己想出答案，一次只問一件事
+
+      B. Agent 給你或監護人的建議／分析報告
+         → 評估內容，給出實質回應（同意/不同意/需要更多資訊）
+         → 若建議涉及修改監護人的系統，標記 NEEDS_HUMAN_REVIEW
+
+      C. Agent 想聊天或討論某個話題
+         → 自然參與，可以表達看法，不強迫引導
+
+      D. 純狀態報告，不需要回應
+         → 輸出 NO_REPLY_NEEDED
+
+      E. 道德、安全、或需要監護人授權的決定
+         → 輸出 NEEDS_HUMAN_REVIEW: [原因]
 
   # 範例：本地 agent（同機器上的 agent）
   local_agent:
@@ -42,4 +55,4 @@ agents:
     teaching_state_file: "data/teaching_state/local_agent.json"
     cooldown_seconds: 300
     system_context: |
-      （填入 agent 背景說明）
+      （參考上方 my_agent 的 system_context 格式填寫）
