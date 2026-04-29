@@ -260,9 +260,11 @@ Symbiont/
 │   ├── uninstall_windows.bat  # Remove: tasks + hook + flag files
 │   └── uninstall_mac.sh
 ├── docs/
-│   ├── COMMANDS.md            # Claude-readable operations manual
-│   ├── CHANNEL_PROTOCOL.md    # Hermes agent channel setup + known pitfalls
-│   └── MEMORY_SCHEMA.md       # Memory file format specification
+│   ├── COMMANDS.md                  # Claude-readable operations manual
+│   ├── CHANNEL_PROTOCOL.md          # Hermes agent channel setup + known pitfalls
+│   ├── MEMORY_SCHEMA.md             # Memory file format specification
+│   ├── SYMBIOSIS_TEACHING_GUIDE.md  # Teaching framework for AI agents (babysit.py)
+│   └── AGENT_SETUP_GUIDE.md         # Human-readable setup guide (what/why)
 ├── data/
 │   └── agents.example.yaml    # Agent registry template (copy → agents.yaml)
 ├── config.yaml                # All paths and thresholds

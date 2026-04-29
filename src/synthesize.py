@@ -143,7 +143,7 @@ SYNTHESIS_PROMPT = """\
 你是 Claude Code 的跨 session 行為進化系統。分析以下多個 session 的摩擦片段和習慣片段，識別 recurring patterns，為每個 pattern 生成對應的 skill。
 
 ## 規則
-- 只識別出現在 3 個以上 session 的 pattern（單次偶發不算）
+- 只識別出現在 {min_evidence} 個以上 session 的 pattern（單次偶發不算）
 - 區分三種 skill 類型：
   - guard：防止慣性錯誤（來自摩擦片段）
   - workflow：標準化重複流程（來自習慣片段）
@@ -184,7 +184,8 @@ SYNTHESIS_PROMPT = """\
 """
 
 
-def _build_synthesis_prompt(friction: str, habit: str, known_topics: list[str]) -> str:
+def _build_synthesis_prompt(friction: str, habit: str, known_topics: list[str],
+                            min_evidence: int = 3) -> str:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     topics_str = ", ".join(known_topics) if known_topics else "（無）"
     friction_str = friction if friction else "（本次 sessions 無摩擦片段）"
@@ -194,6 +195,7 @@ def _build_synthesis_prompt(friction: str, habit: str, known_topics: list[str]) 
         habit_text=habit_str,
         known_topics=topics_str,
         today=today,
+        min_evidence=min_evidence,
     )
 
 
@@ -448,7 +450,8 @@ def run(dry_run: bool = False) -> int:
 
     # ── 組 prompt → LLM ──────────────────────────────────────────
     known_topics = list(state.get("skill_stats", {}).keys())
-    prompt = _build_synthesis_prompt(friction_text, habit_text, known_topics)
+    min_evidence = get_int(cfg, SYNTH_STATE_KEY, "min_evidence_sessions", default=3)
+    prompt = _build_synthesis_prompt(friction_text, habit_text, known_topics, min_evidence)
 
     if dry_run:
         print("[dry-run] prompt preview (first 600 chars):")
