@@ -375,6 +375,10 @@ def _process_inbox(agent_name: str, agent_cfg: dict, transport,
             teaching_state = _load_teaching_state(base_dir, ts_file)
             if teaching_state.status not in ("active", "waiting_reply"):
                 teaching_state.status = "waiting_reply"
+                teaching_state.current_round = 1
+                teaching_state.completed_at = ""
+                teaching_state.completion_summary = ""
+                teaching_state.timeout_warning_ts = 0.0
                 teaching_state.last_sent_ts = float(ts)
                 teaching_state.last_question = response[:LAST_QUESTION_MAX_CHARS]
                 teaching_state.last_processed_dialogue = ""

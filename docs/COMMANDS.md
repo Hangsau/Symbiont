@@ -96,6 +96,20 @@ python src/babysit.py             # 確認後真實執行
 
 **Claude 執行順序**：
 
+0. **偵測 hermes-agent 是否已安裝**：
+   ```bash
+   hermes --version 2>/dev/null || echo "NOT_INSTALLED"
+   ```
+   - **已安裝** → 直接進步驟 1
+   - **未安裝** → 詢問用戶是否需要安裝：
+     > 「hermes-agent 尚未安裝。這是 Hermes AI agent 的核心程式，需要先裝才能繼續。要我幫你安裝嗎？」
+     - 同意 → 執行安裝：
+       ```bash
+       curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+       # TTY 警告（/dev/tty: No such device or address）不是 error，正常繼續
+       ```
+     - 不需要 → 說明 Symbiont 的 babysit 需要 hermes-agent 才能與 AI agent 通訊，流程到此停止
+
 1. **確認部署方式**：問用戶 agent 在哪裡
    - 遠端 VM 或本地 VM (SSH) → `type: remote_ssh`，需要 inbox-watcher + extract_dialogue.py
    - Docker volume mount 或 WSL2 共享目錄 → `type: local`，不需要 watcher（但 teaching loop 不支援）
