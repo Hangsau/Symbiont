@@ -111,7 +111,7 @@ Both sides reflect independently and asynchronously:
 
 ```yaml
 memory_audit:
-  enabled: false        # opt-in; set true to activate
+  enabled: true         # auto-maintenance on by default; set false to disable
   auto_archive: true    # false = report only, no file moves
   thoughts_archive_threshold: 30
   memory_index_warn_lines: 170

@@ -282,11 +282,14 @@ def _write_skill(topic: str, skill_content: str, skills_dir: Path,
 
 def _write_memories(memories: list[dict], memory_dir: Path,
                     memory_index: Path, dry_run: bool) -> None:
-    """將 memories 寫入 memory/thoughts/ 並更新 MEMORY.md 索引。"""
+    """將 memories 寫入 memory/ 或 memory/thoughts/，並更新 MEMORY.md 索引。
+
+    路由規則：
+      type: insight → memory/thoughts/<filename>
+      其他類型    → memory/<filename>
+    """
     if not memories:
         return
-
-    thoughts_dir = memory_dir / "thoughts"
 
     for mem in memories:
         filename = mem.get("filename", "")
@@ -294,16 +297,27 @@ def _write_memories(memories: list[dict], memory_dir: Path,
         if not filename or not content:
             continue
 
-        mem_path = thoughts_dir / filename
+        # 從 frontmatter 讀 type 決定目標目錄
+        type_match = re.search(r"^type:\s*(.+)$", content, re.MULTILINE)
+        mem_type = type_match.group(1).strip() if type_match else "insight"
+
+        if mem_type == "insight":
+            target_dir = memory_dir / "thoughts"
+            index_ref = f"thoughts/{filename}"
+        else:
+            target_dir = memory_dir
+            index_ref = filename
+
+        mem_path = target_dir / filename
 
         if dry_run:
-            print(f"[dry-run] would write memory: {mem_path.name}")
+            print(f"[dry-run] would write memory ({mem_type}): {mem_path}")
             continue
 
         try:
-            thoughts_dir.mkdir(parents=True, exist_ok=True)
+            target_dir.mkdir(parents=True, exist_ok=True)
             mem_path.write_text(content, encoding="utf-8")
-            print(f"[synthesize] memory written: {filename}")
+            print(f"[synthesize] memory written ({mem_type}): {filename}")
         except OSError as e:
             print(f"[synthesize] failed to write memory {filename}: {e}", file=sys.stderr)
             continue
@@ -314,7 +328,7 @@ def _write_memories(memories: list[dict], memory_dir: Path,
         if name_match and desc_match:
             name = name_match.group(1).strip()
             desc = desc_match.group(1).strip()
-            index_line = f"- [{name}](thoughts/{filename}) — {desc}\n"
+            index_line = f"- [{name}]({index_ref}) — {desc}\n"
             try:
                 existing = memory_index.read_text(encoding="utf-8") if memory_index.exists() else ""
                 if filename not in existing:

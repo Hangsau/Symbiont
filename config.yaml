@@ -72,7 +72,7 @@ session_reader:
   max_turns: 50          # 只取最後 N 輪，避免 prompt 過長
 
 memory_audit:
-  enabled: false                   # true = 啟用自動維護；預設關閉，用戶主動啟用
+  enabled: true                    # 自動維護 memory/；設 false 可停用
   auto_archive: true               # false = 只報告不移動任何檔案
   thoughts_archive_threshold: 30   # thoughts/ 超過此數量 → 最舊 10 條移至 archive
   memory_index_warn_lines: 170     # MEMORY.md 超過此行數 → 輸出警告
