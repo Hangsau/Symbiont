@@ -35,6 +35,9 @@ from src.utils.friction_extractor import extract_friction_fragments
 from src.utils.habit_extractor import extract_habit_fragments
 from src.utils.claude_runner import run_claude, check_auth
 from src.utils.file_ops import safe_read, safe_write, append_log, FileLock
+from src.utils.knowledge_writer import (
+    write_knowledge_entry, update_knowledge_tags, move_to_distilled
+)
 
 
 # ── 常數 ──────────────────────────────────────────────────────────
@@ -419,6 +422,223 @@ def _append_evolution_log(log_path: Path, summary: str,
         append_log(log_path, entry)
 
 
+# ── Knowledge Base 蒸餾 ───────────────────────────────────────────
+
+KB_KEY = "knowledge_base"
+
+# 類型前綴 → knowledge/ 子目錄對應
+_TYPE_MAP = {
+    "feedback": "feedback",
+    "project": "project",
+    "reference": "reference",
+    "user": "user",
+    "reflection": "thoughts",
+}
+
+DISTILL_PROMPT = """\
+你是記憶蒸餾系統。將以下多條 {mem_type} 類型的原始記憶蒸餾為精煉知識條目。
+
+## 任務規則
+- 合併語義相近的條目（相似規則只保留最具體的版本）
+- 比對「既有知識庫」，避免重複已有內容（有新細節才更新）
+- 為每條輸出加 tags（3-5 個 kebab-case 關鍵字）
+- 保留具體操作細節，不要過度概括
+- 若所有原始記憶都已被知識庫涵蓋，entries 回傳空陣列
+
+## 既有知識庫（已有，避免重複）
+{existing_knowledge}
+
+## 待蒸餾的原始記憶
+{raw_memories}
+
+## 輸出格式（只輸出 JSON，不含解釋文字）
+```json
+{{
+  "entries": [
+    {{
+      "topic": "kebab-case-topic-name",
+      "source_files": ["feedback_git_push_windows.md"],
+      "tags": ["git", "windows", "credential"],
+      "content": "---\\nname: 簡短標題\\ndescription: 一句話描述（用於索引）\\ntype: {mem_type}\\ntags: [git, windows, credential]\\ncreated: {today}\\nvalid_until: null\\nsuperseded_by: null\\n---\\n\\n具體內容..."
+    }}
+  ]
+}}
+```
+"""
+
+
+def _resolve_knowledge_dir(cfg: dict) -> Path:
+    """知識庫路徑 = primary_project_dir/knowledge/"""
+    return get_path(cfg, "primary_project_dir") / "knowledge"
+
+
+def _load_existing_knowledge(knowledge_dir: Path, mem_type: str,
+                              ctx_cap: int) -> str:
+    """讀取 knowledge/<type>/ 現有條目，供蒸餾時比對（總量限制 ctx_cap/2）。"""
+    type_dir = knowledge_dir / mem_type
+    if not type_dir.exists():
+        return "（尚無既有知識）"
+    files = sorted(type_dir.glob("*.md"))
+    parts: list[str] = []
+    total = 0
+    half_cap = ctx_cap // 2
+    for f in files:
+        text = f.read_text(encoding="utf-8", errors="replace")[:500]
+        chunk = f"### {f.name}\n{text}\n"
+        if total + len(chunk) > half_cap:
+            break
+        parts.append(chunk)
+        total += len(chunk)
+    return "\n".join(parts) if parts else "（尚無既有知識）"
+
+
+def _distill_memories(memory_dir: Path, knowledge_dir: Path,
+                      cfg: dict, state: dict, dry_run: bool,
+                      error_log: Path) -> dict:
+    """將 memory/ 原始條目蒸餾後寫入 knowledge/，回傳 distilled_mapping 更新。
+
+    只處理 distill_min_entries 以上的類型。
+    """
+    min_entries = get_int(cfg, KB_KEY, "distill_min_entries", default=3)
+    ctx_cap = get_int(cfg, KB_KEY, "ctx_cap_chars", default=8000)
+    distilled_dir = memory_dir / "distilled"
+    mapping: dict[str, str] = state.get("distilled_mapping", {})
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # 按 type 分組掃 memory/（排除 distilled/ 和 thoughts/）
+    type_files: dict[str, list[Path]] = {kb_type: [] for kb_type in set(_TYPE_MAP.values())}
+    for f in memory_dir.iterdir():
+        if not f.is_file() or f.suffix != ".md":
+            continue
+        for prefix, kb_type in _TYPE_MAP.items():
+            if f.name.startswith(prefix + "_"):
+                type_files[kb_type].append(f)
+                break
+
+    for kb_type, files in type_files.items():
+        if len(files) < min_entries:
+            continue
+
+        print(f"[synthesize] distilling {len(files)} {kb_type} memories...")
+
+        # 讀原始記憶內容
+        raw_parts: list[str] = []
+        total = 0
+        half_cap = ctx_cap // 2
+        for f in files:
+            text = f.read_text(encoding="utf-8", errors="replace")
+            chunk = f"### {f.name}\n{text[:600]}\n"
+            if total + len(chunk) > half_cap:
+                break
+            raw_parts.append(chunk)
+            total += len(chunk)
+
+        raw_memories = "\n".join(raw_parts)
+        existing = _load_existing_knowledge(knowledge_dir, kb_type, ctx_cap)
+
+        prompt = DISTILL_PROMPT.format(
+            mem_type=kb_type,
+            existing_knowledge=existing,
+            raw_memories=raw_memories,
+            today=today,
+        )
+
+        if dry_run:
+            print(f"[dry-run] would distill {kb_type}: {[f.name for f in files[:3]]}...")
+            continue
+
+        raw_output = run_claude(prompt, cfg)
+        if raw_output is None:
+            append_log(error_log, f"[synthesize] distill LLM failed for {kb_type}")
+            continue
+
+        # 解析 JSON
+        parsed = None
+        try:
+            parsed = json.loads(raw_output.strip())
+        except json.JSONDecodeError:
+            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_output, re.DOTALL)
+            if m:
+                try:
+                    parsed = json.loads(m.group(1))
+                except json.JSONDecodeError:
+                    pass
+
+        if not parsed or not isinstance(parsed.get("entries"), list):
+            append_log(error_log, f"[synthesize] distill parse failed for {kb_type}")
+            continue
+
+        # 寫入 knowledge/ 並移走原始
+        for entry in parsed["entries"]:
+            topic = entry.get("topic", "").strip()
+            content = entry.get("content", "").replace("\\n", "\n")
+            src_files = entry.get("source_files", [])
+            if not topic or not content:
+                continue
+
+            write_knowledge_entry(topic, content, knowledge_dir, kb_type)
+            print(f"[synthesize] knowledge written: {kb_type}/{topic}.md")
+
+            # 移走原始 memory 檔
+            for src_name in src_files:
+                src_path = memory_dir / src_name
+                if src_path.exists():
+                    move_to_distilled(src_path, distilled_dir)
+                    mapping[src_name] = f"{kb_type}/{topic}.md"
+                    print(f"[synthesize] distilled: {src_name}")
+
+    return mapping
+
+
+def _run_update_knowledge_tags(knowledge_dir: Path, dry_run: bool) -> None:
+    """重建 KNOWLEDGE_TAGS.md。"""
+    tags_path = knowledge_dir / "KNOWLEDGE_TAGS.md"
+    if dry_run:
+        print(f"[dry-run] would rebuild KNOWLEDGE_TAGS.md in {knowledge_dir}")
+        return
+    update_knowledge_tags(knowledge_dir, tags_path)
+    tag_count = sum(1 for l in tags_path.read_text(encoding="utf-8").splitlines()
+                    if l.startswith("|") and "tag" not in l and "---" not in l)
+    print(f"[synthesize] KNOWLEDGE_TAGS.md rebuilt: {tag_count} tag entries")
+
+
+def _prune_memory_index(memory_index: Path, mapping: dict,
+                        max_lines: int, dry_run: bool) -> None:
+    """移除 MEMORY.md 中已蒸餾進 knowledge/ 的條目，使行數 ≤ max_lines。"""
+    if not memory_index.exists():
+        return
+    lines = memory_index.read_text(encoding="utf-8").splitlines(keepends=True)
+    original_count = len(lines)
+
+    # 找出已蒸餾的檔名集合
+    distilled_names = set(mapping.keys())
+
+    # 移除索引中引用了已蒸餾檔案的行
+    kept = []
+    for line in lines:
+        # 檢查這行有沒有引用到已蒸餾的 memory 檔名
+        referenced = any(name.replace(".md", "") in line for name in distilled_names)
+        if not referenced:
+            kept.append(line)
+
+    # 若仍超過 max_lines，移除最舊的非 Thoughts 行
+    non_thought_indices = [
+        i for i, l in enumerate(kept)
+        if l.strip().startswith("- [") and "thoughts/" not in l
+    ]
+    while len(kept) > max_lines and non_thought_indices:
+        idx = non_thought_indices.pop(0)
+        kept.pop(idx)
+        non_thought_indices = [i - (1 if i > idx else 0) for i in non_thought_indices]
+
+    if dry_run:
+        print(f"[dry-run] MEMORY.md: {original_count} → {len(kept)} lines")
+        return
+
+    memory_index.write_text("".join(kept), encoding="utf-8")
+    print(f"[synthesize] MEMORY.md pruned: {original_count} → {len(kept)} lines")
+
+
 # ── 主流程 ────────────────────────────────────────────────────────
 
 def run(dry_run: bool = False) -> int:
@@ -521,6 +741,18 @@ def run(dry_run: bool = False) -> int:
 
     # ── Evolution log ─────────────────────────────────────────────
     _append_evolution_log(evolution_log_path, summary, created_skills, deleted_skills, dry_run)
+
+    # ── Knowledge Base 蒸餾 ───────────────────────────────────────
+    if get_str(cfg, KB_KEY, "enabled", default="true").lower() != "false":
+        knowledge_dir = _resolve_knowledge_dir(cfg)
+        max_lines = get_int(cfg, KB_KEY, "memory_hot_max_lines", default=50)
+
+        new_mapping = _distill_memories(memory_dir, knowledge_dir, cfg, state, dry_run, error_log)
+        if new_mapping:
+            state.setdefault("distilled_mapping", {}).update(new_mapping)
+
+        _run_update_knowledge_tags(knowledge_dir, dry_run)
+        _prune_memory_index(memory_index, state.get("distilled_mapping", {}), max_lines, dry_run)
 
     # ── synth_state 更新 ──────────────────────────────────────────
     state["sessions_since_last_synth"] = 0

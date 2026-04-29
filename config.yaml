@@ -80,6 +80,12 @@ memory_audit:
 evolve:
   distill_threshold: 25            # existing rules + new rules >= 此數觸發蒸餾；0 = 停用
 
+knowledge_base:
+  enabled: true
+  distill_min_entries: 3           # 該類型至少幾條才觸發蒸餾
+  memory_hot_max_lines: 50         # MEMORY.md 壓縮後目標行數
+  ctx_cap_chars: 8000              # 蒸餾 LLM call 的 memory 內容上限
+
 synthesize:
   sessions_per_cycle: 10           # 每 N 次 evolve 觸發一次 synthesis
   ctx_cap_chars: 12000             # 所有 session fragment 總字數上限
