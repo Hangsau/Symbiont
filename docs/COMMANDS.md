@@ -280,27 +280,37 @@ cat data/synth_state.json   # 查看 counter（sessions_since_last_synth）和 s
 
 ---
 
-## 查看 knowledge base
+## 搜尋 knowledge base
 
-**用戶說**：「知識庫有什麼」或「查一下 [關鍵字] 的記憶」
+**用戶說**：「知識庫有什麼」或「查一下 [關鍵字] 的記憶」或「搜尋 [關鍵字]」
 
-**Claude 執行**：
+**CLI 搜尋（用戶可直接跑）**：
 ```bash
-# 搜尋知識庫 tag 索引
-grep "[關鍵字]" [primary_project]/knowledge/KNOWLEDGE_TAGS.md
-
-# 列出各類別的知識條目
-ls [primary_project]/knowledge/feedback/
-ls [primary_project]/knowledge/project/
-ls [primary_project]/knowledge/reference/
+cd [Symbiont 路徑]
+python src/utils/knowledge_writer.py "git"            # 列出命中條目
+python src/utils/knowledge_writer.py "git" --content  # 同時印出檔案內容
 ```
 
-找到相關條目後，Read 對應的 `knowledge/<type>/<file>.md`。
+**Claude 執行**（搜尋並讀取）：
+```bash
+# 1. 搜尋 tag 索引
+Grep "git" knowledge/KNOWLEDGE_TAGS.md
+
+# 2. 找到後 Read 對應檔案
+Read knowledge/feedback/git-push-windows.md
+```
 
 **查找順序**（Claude 應自動遵守）：
 1. `Grep knowledge/KNOWLEDGE_TAGS.md <關鍵字>` → 找到 → Read `knowledge/<type>/<file>.md`
 2. 找不到 → `Grep memory/ <關鍵字>`（尚未蒸餾的新記憶）
 3. 都找不到 → 問用戶
+
+**列出知識庫內容**：
+```bash
+ls [primary_project]/knowledge/feedback/
+ls [primary_project]/knowledge/project/
+ls [primary_project]/knowledge/reference/
+```
 
 ---
 

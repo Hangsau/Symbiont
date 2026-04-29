@@ -8,6 +8,7 @@ knowledge_writer.py — 知識庫寫入與索引維護
 """
 
 import re
+import sys
 from pathlib import Path
 
 MAX_TAG_DESC_CHARS = 80   # tag 描述欄位最大字數
@@ -98,6 +99,51 @@ def update_knowledge_tags(knowledge_dir: Path, tags_path: Path) -> None:
     tags_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def search_knowledge(knowledge_dir: Path, keyword: str) -> list[dict]:
+    """在 KNOWLEDGE_TAGS.md 搜尋關鍵字，回傳命中的條目列表。
+
+    Args:
+        knowledge_dir: knowledge/ 根目錄
+        keyword:       搜尋關鍵字（不區分大小寫，支援部分匹配）
+
+    Returns:
+        list of {"tag", "type", "file", "description", "path"}
+        path 為 knowledge/<type>/<file> 的完整 Path
+    """
+    tags_path = knowledge_dir / "KNOWLEDGE_TAGS.md"
+    if not tags_path.exists():
+        return []
+
+    results: list[dict] = []
+    kw = keyword.lower()
+
+    for line in tags_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.startswith("|") or "tag" in line or "---" in line:
+            continue
+        parts = [p.strip() for p in line.strip("|").split("|")]
+        if len(parts) < 4:
+            continue
+        tag, mem_type, rel_file, description = parts[0], parts[1], parts[2], parts[3]
+        if kw in tag.lower() or kw in description.lower() or kw in rel_file.lower():
+            full_path = knowledge_dir / rel_file
+            results.append({
+                "tag": tag,
+                "type": mem_type,
+                "file": rel_file,
+                "description": description,
+                "path": full_path,
+            })
+
+    # 去重（同 file 只保留一條，優先 tag 完全匹配的）
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for r in sorted(results, key=lambda x: (x["file"] != keyword, x["file"])):
+        if r["file"] not in seen:
+            seen.add(r["file"])
+            unique.append(r)
+    return unique
+
+
 def move_to_distilled(memory_path: Path, distilled_dir: Path) -> None:
     """將已蒸餾的原始 memory 移到 memory/distilled/（保留副本，不刪除）。
 
@@ -113,3 +159,46 @@ def move_to_distilled(memory_path: Path, distilled_dir: Path) -> None:
             dest = distilled_dir / f"{stem}_{counter}{suffix}"
             counter += 1
     memory_path.rename(dest)
+
+
+# ── CLI 入口 ──────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    if sys.platform == "win32":
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
+    if len(sys.argv) < 2:
+        print("用法：python src/utils/knowledge_writer.py <關鍵字>")
+        print("      python src/utils/knowledge_writer.py <關鍵字> --content  # 同時印出內容")
+        sys.exit(1)
+
+    keyword = sys.argv[1]
+    show_content = "--content" in sys.argv
+
+    # 自動找 knowledge_dir（從 config.yaml）
+    try:
+        root = Path(__file__).parent.parent.parent
+        sys.path.insert(0, str(root))
+        from src.utils.config_loader import load_config, get_path
+        cfg = load_config()
+        knowledge_dir = get_path(cfg, "primary_project_dir") / "knowledge"
+    except Exception as e:
+        print(f"[error] 無法載入 config: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    results = search_knowledge(knowledge_dir, keyword)
+
+    if not results:
+        print(f"找不到包含「{keyword}」的知識條目")
+        sys.exit(0)
+
+    print(f"找到 {len(results)} 條（關鍵字：{keyword}）\n")
+    for r in results:
+        print(f"  [{r['type']}] {r['file']}")
+        print(f"    {r['description']}")
+        if show_content and r["path"].exists():
+            print()
+            print(r["path"].read_text(encoding="utf-8", errors="replace")[:800])
+        print()
