@@ -19,6 +19,7 @@ Claude Code sessions are ephemeral. Every session ends, the context disappears.
 | Module | What it does | When it runs |
 |--------|-------------|-------------|
 | `evolve.py` | Reads session logs, extracts behavioral rules, writes them to `~/.claude/CLAUDE.md` | After every Claude Code session ends |
+| `synthesize.py` | Analyzes the last 10 sessions together, identifies recurring patterns, auto-generates Guard / Workflow / Audit skills, writes insights to memory, prunes unused skills | Every 10 sessions (triggered by evolve.py) |
 | `memory_audit.py` | Scans memory files for expired `review_by` dates, archives stale entries | Daily at 02:00 |
 | `babysit.py` | Polls AI agent inboxes, generates Socratic guidance via `claude -p`, sends replies | Every 2 minutes |
 
@@ -78,7 +79,7 @@ You'll get the most out of Symbiont if you:
 
 Both sides reflect independently and asynchronously:
 
-- **Claude's side**: `evolve.py` reads human↔Claude session logs → extracts behavioral rules → updates `CLAUDE.md`
+- **Claude's side**: `evolve.py` reads human↔Claude session logs → extracts behavioral rules → updates `CLAUDE.md`. Every 10 sessions, `synthesize.py` runs a batch analysis → generates skills → writes memory insights.
 - **Agent's side**: `dialogue-review` cron reads conversation history → updates the agent's own `MEMORY.md`
 
 > `babysit.py`-generated sessions are intentionally excluded from `evolve.py`. The reflection pipeline targets human↔Claude patterns — agent↔Claude exchanges are the subject of the work, not the work style being learned.
@@ -114,6 +115,42 @@ memory_audit:
   auto_archive: true    # false = report only, no file moves
   thoughts_archive_threshold: 30
   memory_index_warn_lines: 170
+```
+
+---
+
+### `synthesize.py` — Cross-session Skill Generation
+
+Where `evolve.py` learns from one session at a time, `synthesize.py` looks across sessions to find patterns that only become visible over time.
+
+Every 10 sessions, it:
+
+1. Collects the last 10 session logs
+2. Extracts two kinds of signal from each:
+   - **Friction fragments** — moments where you corrected Claude, or Claude backtracked (signals something needs a guard)
+   - **Habit fragments** — recurring task-initiation patterns (signals a workflow or audit checklist worth formalizing)
+3. Calls `claude -p` with all fragments combined (capped at 12,000 chars)
+4. For each recurring pattern (appearing in 3+ sessions): generates a complete `SKILL.md` and writes it to `~/.claude/skills/<topic>/`
+5. Writes any cross-session insights to `memory/thoughts/`
+6. Tracks skill usage across cycles; removes skills that stay below 2 standard deviations of usage for 2+ consecutive cycles
+
+**Three skill types generated:**
+
+| Type | Source | Purpose |
+|------|--------|---------|
+| `guard` | Friction fragments | Pause before an action Claude keeps getting wrong |
+| `workflow` | Habit fragments | Standardize a recurring multi-step process |
+| `audit` | Habit fragments | Quality checklist after completing a task type |
+
+**Absolute rule**: if JSON parsing fails, nothing is written — only `error.log` is updated.
+
+```yaml
+synthesize:
+  sessions_per_cycle: 10       # how many sessions before synthesis runs
+  ctx_cap_chars: 12000         # total fragment size limit
+  min_evidence_sessions: 3     # pattern must appear in N sessions to generate a skill
+  skill_stdev_multiplier: 2.0  # below mean - N×stdev = low-usage
+  skill_low_cycles_to_delete: 2
 ```
 
 ---
@@ -206,13 +243,17 @@ For `evolve.py` and `memory_audit.py`, the Stop hook alone is sufficient — the
 Symbiont/
 ├── src/
 │   ├── evolve.py              # Session analysis → CLAUDE.md rules
+│   ├── synthesize.py          # Cross-session batch analysis → skill generation
 │   ├── memory_audit.py        # Daily memory health maintenance
 │   ├── babysit.py             # Agent caretaker (reactive + teaching loop)
 │   └── utils/
-│       ├── session_reader.py  # Parse .jsonl Claude Code session logs
-│       ├── claude_runner.py   # claude -p subprocess wrapper (cross-platform)
-│       ├── file_ops.py        # Atomic writes, file locking, log rotation
-│       └── transport.py       # SSH/SCP + local file I/O transport abstraction
+│       ├── session_reader.py     # Parse .jsonl Claude Code session logs
+│       ├── friction_extractor.py # Extract correction signals (guard skill feed)
+│       ├── habit_extractor.py    # Extract task patterns (workflow/audit feed)
+│       ├── turn_utils.py         # Shared: extract_context() for extractors
+│       ├── claude_runner.py      # claude -p subprocess wrapper (cross-platform)
+│       ├── file_ops.py           # Atomic writes, file locking, log rotation
+│       └── transport.py          # SSH/SCP + local file I/O transport abstraction
 ├── setup/
 │   ├── setup_windows.bat      # Install: pip + Task Scheduler + Stop hook
 │   ├── setup_memory.bat/.sh   # Initialize memory/ skeleton
@@ -293,6 +334,7 @@ Every 2 minutes (Task Scheduler):
 | Module | LLM calls | When |
 |--------|-----------|------|
 | `evolve.py` | 1 per session (2 when distillation triggers) | After each Claude Code session |
+| `synthesize.py` | 1 per cycle (occasionally 2 for large pattern sets) | Every 10 sessions |
 | `memory_audit.py` | **0** — file I/O only | Daily |
 | `babysit.py` | 1 per agent message | Only when the agent sends something |
 
