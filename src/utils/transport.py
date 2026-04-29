@@ -78,8 +78,14 @@ class SSHTransport:
         return [f for f in out.splitlines() if f.strip()]
 
     def read_file(self, remote_path: str) -> str | None:
-        escaped = remote_path.replace("'", "'\\''")
-        ok, out = self._ssh(f"cat '{escaped}'")
+        # 只 quote 檔名部分，讓目錄的 ~ 正常展開
+        if '/' in remote_path:
+            dir_part, file_part = remote_path.rsplit('/', 1)
+            file_escaped = file_part.replace("'", "'\\''")
+            cmd = f"cat {dir_part}/'{file_escaped}'"
+        else:
+            cmd = f"cat '{remote_path.replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'"
+        ok, out = self._ssh(cmd)
         if not ok:
             return None
         return out if out else None
