@@ -40,25 +40,36 @@ You'll get the most out of Symbiont if you:
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│                     YOUR COMPUTER (Symbiont)                      │
-│                                                                   │
-│  Claude Code session ends                                         │
-│       │                                                           │
-│       ▼ Stop hook (30s delay)                                     │
-│  evolve.py  ──────────────────────────►  ~/.claude/CLAUDE.md      │
-│  (reads ~/.claude/projects/**/*.jsonl)    (behavioral rules)      │
-│                                                                   │
-│  memory/*.md  ──────────────►  memory_audit.py                    │
-│  (review_by dates)              │                                 │
-│                                 ▼                                 │
-│                           memory/archive/                         │
-│                                                                   │
-│  agents.yaml  ──────────►  babysit.py  ──  claude -p              │
-│  (agent registry)           │                                     │
-└─────────────────────────────┼─────────────────────────────────────┘
-                              │ SSH/SCP  (or local file I/O)
-                              ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        YOUR COMPUTER (Symbiont)                        │
+│                                                                        │
+│  Claude Code session ends                                              │
+│       │                                                                │
+│       ▼ Stop hook (30s delay)                                          │
+│  evolve.py ──────────────────────────────► ~/.claude/CLAUDE.md         │
+│  (reads ~/.claude/projects/**/*.jsonl)       (behavioral rules)        │
+│       │                                                                │
+│       │ every 10 sessions                                              │
+│       ▼                                                                │
+│  synthesize.py                                                         │
+│  ├── friction fragments ──► Guard skills  ──► ~/.claude/skills/        │
+│  ├── habit fragments ────► Workflow/Audit skills                       │
+│  ├── memory insights ────► memory/thoughts/                            │
+│  └── distillation                                                      │
+│       ├── memory/*.md ──► knowledge/<type>/ (long-term)                │
+│       ├── memory/distilled/ (originals archived)                       │
+│       └── knowledge/KNOWLEDGE_TAGS.md (grep index rebuilt)             │
+│                                                                        │
+│  memory/*.md ──────────────► memory_audit.py                           │
+│  (review_by dates)                │                                    │
+│                                   ▼                                    │
+│                             memory/archive/                            │
+│                                                                        │
+│  agents.yaml ──────────────► babysit.py ── claude -p                  │
+│  (agent registry)                │                                     │
+└──────────────────────────────────┼─────────────────────────────────────┘
+                                   │ SSH/SCP  (or local file I/O)
+                                   ▼
 ┌──────────────────────────────────────────────┐
 │         AGENT MACHINE (VM / Docker / local)  │
 │                                              │

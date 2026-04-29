@@ -256,6 +256,95 @@ python src/evolve.py             # 確認後真實執行
 
 ---
 
+## 立即執行 synthesize（跨 session 分析）
+
+**用戶說**：「立刻跑一次 synthesize」或「現在分析最近的 sessions」或「立刻蒸餾記憶」
+
+**Claude 執行**：
+```bash
+cd [Symbiont 路徑]
+python src/synthesize.py --dry-run   # 先預覽（列出會分析哪些 session、蒸餾哪些 memory）
+python src/synthesize.py             # 確認後真實執行
+```
+
+**預覽輸出說明**：
+- `found N sessions` — 準備分析幾個 session
+- `fragments: friction=Xc, habit=Yc, total=Zc` — 提取到的 fragment 字數（應 ≤ 12000）
+- `distilling N feedback memories...` — 各類型 memory 待蒸餾數量
+- `MEMORY.md: X → Y lines` — MEMORY.md 預計壓縮幾行
+
+**查看 synthesis 狀態**：
+```bash
+cat data/synth_state.json   # 查看 counter（sessions_since_last_synth）和 skill stats
+```
+
+---
+
+## 查看 knowledge base
+
+**用戶說**：「知識庫有什麼」或「查一下 [關鍵字] 的記憶」
+
+**Claude 執行**：
+```bash
+# 搜尋知識庫 tag 索引
+grep "[關鍵字]" [primary_project]/knowledge/KNOWLEDGE_TAGS.md
+
+# 列出各類別的知識條目
+ls [primary_project]/knowledge/feedback/
+ls [primary_project]/knowledge/project/
+ls [primary_project]/knowledge/reference/
+```
+
+找到相關條目後，Read 對應的 `knowledge/<type>/<file>.md`。
+
+**查找順序**（Claude 應自動遵守）：
+1. `Grep knowledge/KNOWLEDGE_TAGS.md <關鍵字>` → 找到 → Read `knowledge/<type>/<file>.md`
+2. 找不到 → `Grep memory/ <關鍵字>`（尚未蒸餾的新記憶）
+3. 都找不到 → 問用戶
+
+---
+
+## 重建 knowledge base 索引
+
+**用戶說**：「重建知識庫索引」或「KNOWLEDGE_TAGS.md 好像不對」
+
+**Claude 執行**：
+```bash
+cd [Symbiont 路徑]
+python src/synthesize.py --dry-run   # 確認 knowledge_dir 路徑正確
+python -c "
+import sys; sys.path.insert(0, '.')
+from pathlib import Path
+from src.utils.config_loader import load_config, get_path
+from src.utils.knowledge_writer import update_knowledge_tags
+cfg = load_config()
+kdir = get_path(cfg, 'primary_project_dir') / 'knowledge'
+update_knowledge_tags(kdir, kdir / 'KNOWLEDGE_TAGS.md')
+print('done')
+"
+```
+
+---
+
+## 查看蒸餾紀錄
+
+**用戶說**：「哪些記憶已被蒸餾」或「查 distilled_mapping」
+
+**Claude 執行**：
+```bash
+python -c "
+import json
+from pathlib import Path
+state = json.loads(Path('data/synth_state.json').read_text(encoding='utf-8'))
+mapping = state.get('distilled_mapping', {})
+print(f'已蒸餾: {len(mapping)} 條')
+for src, dest in list(mapping.items())[:10]:
+    print(f'  {src} → {dest}')
+"
+```
+
+---
+
 ## 移除 Symbiont
 
 **用戶說**：「幫我移除 Symbiont」或「卸載 Symbiont」
