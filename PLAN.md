@@ -350,6 +350,43 @@ python src/healthz.py
 
 ---
 
+### M7 — synthesize.py（跨 Session 自動進化）✅ 2026-04-29
+
+**目標**：evolve.py 每跑 10 次後自動觸發 synthesize.py，批次分析最近 10 個 session，自動生成/迭代 skill、寫入 memory、清掃低使用率 skill。
+
+**新增檔案**：`src/synthesize.py`、`src/utils/friction_extractor.py`（Track A）、`src/utils/habit_extractor.py`（Track B）、`src/utils/turn_utils.py`、`data/synth_state.json`
+
+**關鍵設計**：
+- friction 提取（糾正信號）→ Guard skill；habit 提取（任務啟動句型）→ Workflow/Audit skill
+- 10 sessions context cap 12,000 chars（文字 filter 先壓縮）
+- Skill 使用率：標準差模型，連續 2 次低於 mean-2σ 且不成長 → 自動刪除
+- evolve.py counter：wrap-skip 路徑也遞增，不因 /wrap 而永遠不觸發
+
+---
+
+### M8 — Knowledge Base（記憶分層知識庫）✅ 2026-04-29
+
+**目標**：memory/ 原始記憶 → synthesize 蒸餾 → knowledge/<type>/ 長期知識庫；MEMORY.md 壓縮為熱層（≤50 行）；KNOWLEDGE_TAGS.md 提供 Grep 索引。
+
+**新增檔案**：`src/utils/knowledge_writer.py`（write/update_tags/move_to_distilled）
+
+**記憶分層架構**：
+```
+MEMORY.md（熱層，30-50 條，session 自動載入）
+memory/（原始，待蒸餾）
+knowledge/<type>/（長期，已整理）
+knowledge/KNOWLEDGE_TAGS.md（Grep 索引）
+```
+
+**查找規則**（已更新 CLAUDE.md）：
+1. Grep KNOWLEDGE_TAGS.md → 找到 → Read knowledge/<type>/<file>
+2. 找不到 → Grep memory/（尚未蒸餾的新記憶）
+3. 都找不到 → 問用戶
+
+**蒸餾邏輯**：先讀 knowledge/<type>/ 既有條目比對去重，再送 LLM；原始 memory 移至 memory/distilled/ 保留副本。
+
+---
+
 ### M6 — Rule Distillation（evolve.py 規則蒸餾）
 
 **背景**：`evolve.py` 只會 append 規則，長期使用後 `## 自動學習規則` section 會無限增長，導致重複、過時、稀釋高價值規則。

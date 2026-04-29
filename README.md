@@ -119,9 +119,9 @@ memory_audit:
 
 ---
 
-### `synthesize.py` — Cross-session Skill Generation
+### `synthesize.py` — Cross-session Synthesis
 
-Where `evolve.py` learns from one session at a time, `synthesize.py` looks across sessions to find patterns that only become visible over time.
+Where `evolve.py` learns from one session at a time, `synthesize.py` looks across sessions to find patterns that only become visible over time, then distills raw memory into a structured knowledge base.
 
 Every 10 sessions, it:
 
@@ -142,6 +142,23 @@ Every 10 sessions, it:
 | `workflow` | Habit fragments | Standardize a recurring multi-step process |
 | `audit` | Habit fragments | Quality checklist after completing a task type |
 
+**Memory distillation** (runs after skill generation):
+
+1. Groups `memory/*.md` files by type (feedback, project, reference, user)
+2. For each type with 3+ entries: calls `claude -p` with existing `knowledge/<type>/` entries for deduplication, then the new raw entries to merge
+3. Writes distilled entries to `knowledge/<type>/` (permanent, tagged)
+4. Moves processed originals to `memory/distilled/` (archived, not deleted)
+5. Rebuilds `knowledge/KNOWLEDGE_TAGS.md` — a Grep-ready index (`| tag | type | file | description |`)
+6. Prunes `MEMORY.md` to ≤ 50 lines (hot tier only)
+
+**Memory architecture after distillation:**
+```
+MEMORY.md          → hot tier (30–50 entries, auto-loaded every session)
+memory/            → raw, pending distillation
+knowledge/<type>/  → distilled, permanent, tagged
+knowledge/KNOWLEDGE_TAGS.md  → grep index: grep "git" → relevant files
+```
+
 **Absolute rule**: if JSON parsing fails, nothing is written — only `error.log` is updated.
 
 ```yaml
@@ -151,6 +168,12 @@ synthesize:
   min_evidence_sessions: 3     # pattern must appear in N sessions to generate a skill
   skill_stdev_multiplier: 2.0  # below mean - N×stdev = low-usage
   skill_low_cycles_to_delete: 2
+
+knowledge_base:
+  enabled: true
+  distill_min_entries: 3       # minimum entries per type to trigger distillation
+  memory_hot_max_lines: 50     # MEMORY.md target line count after pruning
+  ctx_cap_chars: 8000          # context cap for distillation LLM call
 ```
 
 ---
@@ -248,12 +271,13 @@ Symbiont/
 │   ├── babysit.py             # Agent caretaker (reactive + teaching loop)
 │   └── utils/
 │       ├── session_reader.py     # Parse .jsonl Claude Code session logs
-│       ├── friction_extractor.py # Extract correction signals (guard skill feed)
-│       ├── habit_extractor.py    # Extract task patterns (workflow/audit feed)
-│       ├── turn_utils.py         # Shared: extract_context() for extractors
-│       ├── claude_runner.py      # claude -p subprocess wrapper (cross-platform)
-│       ├── file_ops.py           # Atomic writes, file locking, log rotation
-│       └── transport.py          # SSH/SCP + local file I/O transport abstraction
+│       ├── friction_extractor.py  # Extract correction signals (guard skill feed)
+│       ├── habit_extractor.py     # Extract task patterns (workflow/audit feed)
+│       ├── turn_utils.py          # Shared: extract_context() for extractors
+│       ├── knowledge_writer.py    # Write knowledge/ entries, rebuild KNOWLEDGE_TAGS.md
+│       ├── claude_runner.py       # claude -p subprocess wrapper (cross-platform)
+│       ├── file_ops.py            # Atomic writes, file locking, log rotation
+│       └── transport.py           # SSH/SCP + local file I/O transport abstraction
 ├── setup/
 │   ├── setup_windows.bat      # Install: pip + Task Scheduler + Stop hook
 │   ├── setup_memory.bat/.sh   # Initialize memory/ skeleton
@@ -336,7 +360,7 @@ Every 2 minutes (Task Scheduler):
 | Module | LLM calls | When |
 |--------|-----------|------|
 | `evolve.py` | 1 per session (2 when distillation triggers) | After each Claude Code session |
-| `synthesize.py` | 1 per cycle (occasionally 2 for large pattern sets) | Every 10 sessions |
+| `synthesize.py` | 1–4 per cycle (skill generation + 1 per memory type distilled) | Every 10 sessions |
 | `memory_audit.py` | **0** — file I/O only | Daily |
 | `babysit.py` | 1 per agent message | Only when the agent sends something |
 
