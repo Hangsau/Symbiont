@@ -369,6 +369,16 @@ def _process_inbox(agent_name: str, agent_cfg: dict, transport,
         if ok:
             append_log(base_dir / LOG_FILE, f"[{agent_name}] 回應已送出 → {filename}")
             agent_state.last_reply_ts = float(ts)
+            # 送出後啟動 teaching loop：等 Talos 從 claude-dialogues/ 回來
+            ts_file = agent_cfg.get("teaching_state_file",
+                                    f"data/teaching_state/{agent_name}.json")
+            teaching_state = _load_teaching_state(base_dir, ts_file)
+            if teaching_state.status not in ("active", "waiting_reply"):
+                teaching_state.status = "waiting_reply"
+                teaching_state.last_sent_ts = float(ts)
+                teaching_state.last_question = response[:LAST_QUESTION_MAX_CHARS]
+                teaching_state.last_processed_dialogue = ""
+                _save_teaching_state(base_dir, ts_file, teaching_state, dry_run)
         else:
             append_log(base_dir / ERROR_LOG, f"[{agent_name}] SCP 失敗：{filename}")
             _write_dead_letter(base_dir, agent_name, outbox_remote, filename, content_to_send)
