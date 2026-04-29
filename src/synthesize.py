@@ -232,6 +232,24 @@ def _parse_synthesis_output(raw: str) -> dict | None:
     return None
 
 
+def _validate_distill_output(data: dict) -> bool:
+    """驗證 _call_distill_llm 的輸出：必須有 entries list。"""
+    return isinstance(data, dict) and isinstance(data.get("entries"), list)
+
+
+def _call_distill_llm(prompt: str, cfg: dict, error_log: Path) -> list[dict] | None:
+    """呼叫 LLM 執行蒸餾，回傳 entries list；失敗回傳 None 並記 error.log。"""
+    raw = run_claude(prompt, cfg)
+    if raw is None:
+        append_log(error_log, "[synthesize] distill LLM call failed")
+        return None
+    parsed = _parse_synthesis_output(raw)
+    if not parsed or not _validate_distill_output(parsed):
+        append_log(error_log, f"[synthesize] distill JSON parse/validate failed. raw[:300]={str(raw)[:300]}")
+        return None
+    return parsed["entries"]
+
+
 def _validate_synthesis_output(data: dict) -> bool:
     if not isinstance(data, dict):
         return False
@@ -549,29 +567,12 @@ def _distill_memories(memory_dir: Path, knowledge_dir: Path,
             print(f"[dry-run] would distill {kb_type}: {[f.name for f in files[:3]]}...")
             continue
 
-        raw_output = run_claude(prompt, cfg)
-        if raw_output is None:
-            append_log(error_log, f"[synthesize] distill LLM failed for {kb_type}")
-            continue
-
-        # 解析 JSON
-        parsed = None
-        try:
-            parsed = json.loads(raw_output.strip())
-        except json.JSONDecodeError:
-            fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_output, re.DOTALL)
-            if fence_match:
-                try:
-                    parsed = json.loads(fence_match.group(1))
-                except json.JSONDecodeError:
-                    pass
-
-        if not parsed or not isinstance(parsed.get("entries"), list):
-            append_log(error_log, f"[synthesize] distill parse failed for {kb_type}")
+        entries = _call_distill_llm(prompt, cfg, error_log)
+        if entries is None:
             continue
 
         # 寫入 knowledge/ 並移走原始
-        for entry in parsed["entries"]:
+        for entry in entries:
             topic = entry.get("topic", "").strip()
             content = entry.get("content", "").replace("\\n", "\n")
             src_files = entry.get("source_files", [])
