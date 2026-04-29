@@ -425,6 +425,8 @@ def _append_evolution_log(log_path: Path, summary: str,
 # ── Knowledge Base 蒸餾 ───────────────────────────────────────────
 
 KB_KEY = "knowledge_base"
+_EXISTING_FILE_READ_CHARS = 500   # existing knowledge 每檔讀取上限
+_RAW_FILE_READ_CHARS = 600        # raw memory 每檔讀取上限
 
 # 類型前綴 → knowledge/ 子目錄對應
 _TYPE_MAP = {
@@ -483,7 +485,7 @@ def _load_existing_knowledge(knowledge_dir: Path, mem_type: str,
     total = 0
     half_cap = ctx_cap // 2
     for f in files:
-        text = f.read_text(encoding="utf-8", errors="replace")[:500]
+        text = f.read_text(encoding="utf-8", errors="replace")[:_EXISTING_FILE_READ_CHARS]
         chunk = f"### {f.name}\n{text}\n"
         if total + len(chunk) > half_cap:
             break
@@ -527,7 +529,7 @@ def _distill_memories(memory_dir: Path, knowledge_dir: Path,
         half_cap = ctx_cap // 2
         for f in files:
             text = f.read_text(encoding="utf-8", errors="replace")
-            chunk = f"### {f.name}\n{text[:600]}\n"
+            chunk = f"### {f.name}\n{text[:_RAW_FILE_READ_CHARS]}\n"
             if total + len(chunk) > half_cap:
                 break
             raw_parts.append(chunk)
@@ -557,10 +559,10 @@ def _distill_memories(memory_dir: Path, knowledge_dir: Path,
         try:
             parsed = json.loads(raw_output.strip())
         except json.JSONDecodeError:
-            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_output, re.DOTALL)
-            if m:
+            fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_output, re.DOTALL)
+            if fence_match:
                 try:
-                    parsed = json.loads(m.group(1))
+                    parsed = json.loads(fence_match.group(1))
                 except json.JSONDecodeError:
                     pass
 
@@ -597,8 +599,8 @@ def _run_update_knowledge_tags(knowledge_dir: Path, dry_run: bool) -> None:
         print(f"[dry-run] would rebuild KNOWLEDGE_TAGS.md in {knowledge_dir}")
         return
     update_knowledge_tags(knowledge_dir, tags_path)
-    tag_count = sum(1 for l in tags_path.read_text(encoding="utf-8").splitlines()
-                    if l.startswith("|") and "tag" not in l and "---" not in l)
+    tag_count = sum(1 for line in tags_path.read_text(encoding="utf-8").splitlines()
+                    if line.startswith("|") and "tag" not in line and "---" not in line)
     print(f"[synthesize] KNOWLEDGE_TAGS.md rebuilt: {tag_count} tag entries")
 
 

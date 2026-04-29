@@ -10,6 +10,8 @@ knowledge_writer.py — 知識庫寫入與索引維護
 import re
 from pathlib import Path
 
+MAX_TAG_DESC_CHARS = 80   # tag 描述欄位最大字數
+
 
 def write_knowledge_entry(topic: str, content: str,
                           knowledge_dir: Path, mem_type: str) -> Path:
@@ -70,7 +72,7 @@ def update_knowledge_tags(knowledge_dir: Path, tags_path: Path) -> None:
 
         for tag in raw_tags:
             if tag:
-                rows.append((tag, mem_type, rel_path, description[:80]))
+                rows.append((tag, mem_type, rel_path, description[:MAX_TAG_DESC_CHARS]))
 
     # 去重（同 tag + 同 file 只保留一條）
     seen: set[tuple[str, str]] = set()
