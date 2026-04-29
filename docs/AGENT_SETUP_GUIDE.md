@@ -49,3 +49,56 @@ Hermes agent 的 context 會定期重置。如果 agent 不知道「你是誰、
 | Case Bank（任務軌跡庫） | Memento — arxiv 2508.16153（GAIA 87.88% Pass@3，優於部分 fine-tuning） |
 | 外部化四模組框架 | Harness Engineering — arxiv 2604.08224 |
 | 跨 session 狀態保留 | Anthropic「Effective harnesses for long-running agents」 |
+
+---
+
+## Claude 設置 Hermes Agent 的已知坑（2026-04-29 實戰整理）
+
+> 這一節給執行設置的 Claude 讀，不是給用戶讀的。
+
+### ⚠️ 最重要：`.env` 比 `config.yaml` 優先
+
+hermes 的設計是 `.env` 值覆蓋 `config.yaml`。**修改 provider / model / API key，改的是 `.env`，不是 `config.yaml`。**
+
+```
+/home/<user>/.hermes/.env  ← 改這裡
+/home/<user>/.hermes/config.yaml  ← 只放 fallback、telegram 等結構設定
+```
+
+`.env` 關鍵欄位：
+```env
+OPENAI_API_KEY=<provider的key>
+OPENAI_BASE_URL=<provider的base_url>
+HERMES_INFERENCE_PROVIDER=custom
+HERMES_INFERENCE_MODEL=<model名稱>
+```
+
+### ⚠️ 不需要 LiteLLM
+
+hermes 有原生 `fallback_providers` 語法，直接在 `config.yaml` 設定即可：
+
+```yaml
+fallback_providers:
+  - model: meta-llama/llama-3.3-70b-instruct:free
+    provider: openrouter
+  - model: gemini-2.0-flash
+    provider: gemini
+```
+
+不要安裝 LiteLLM proxy——多一層等於多一個故障點。
+
+### ⚠️ 動手前先讀範例 config
+
+hermes 有完整的範例，包含所有可用欄位和說明：
+```bash
+cat ~/.hermes/hermes-agent/cli-config.yaml.example
+```
+
+### ⚠️ gateway 狀態查詢用 gateway_state.json
+
+`pgrep -f hermes` 不可靠（可能只抓到短暫的父進程）。用：
+```bash
+cat ~/.hermes/gateway_state.json | grep gateway_state
+```
+`"gateway_state": "running"` + `"telegram": {"state": "connected"}` 才算真的通。
+
