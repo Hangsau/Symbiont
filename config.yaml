@@ -72,13 +72,22 @@ session_reader:
   max_turns: 50          # 只取最後 N 輪，避免 prompt 過長
 
 memory_audit:
-  enabled: false                   # true = 啟用自動維護；預設關閉，用戶主動啟用
+  enabled: true                    # true = 啟用自動維護；預設關閉，用戶主動啟用
   auto_archive: true               # false = 只報告不移動任何檔案
   thoughts_archive_threshold: 30   # thoughts/ 超過此數量 → 最舊 10 條移至 archive
   memory_index_warn_lines: 170     # MEMORY.md 超過此行數 → 輸出警告
 
 evolve:
   distill_threshold: 25            # existing rules + new rules >= 此數觸發蒸餾；0 = 停用
+
+synthesize:
+  sessions_per_cycle: 10           # 每 N 次 evolve 觸發一次 synthesis
+  ctx_cap_chars: 12000             # 所有 session fragment 總字數上限
+  friction_per_session: 1500       # 每 session 摩擦片段上限（chars）
+  habit_per_session: 800           # 每 session 習慣片段上限（chars）
+  min_evidence_sessions: 3         # pattern 至少出現在幾個 session 才生成 skill
+  skill_stdev_multiplier: 2.0      # 低於 mean - N×stdev 視為低使用率
+  skill_low_cycles_to_delete: 2    # 連續幾次低使用率才刪除 skill
 
 babysit:
   teaching_timeout_seconds: 1800   # teaching loop 等待 agent 回應的逾時（秒）

@@ -108,6 +108,25 @@ def find_session_by_uuid(sessions_dir: Path, uuid: str) -> Path | None:
     return matches[0] if matches else None
 
 
+def find_sessions_since(sessions_dir: Path, after_ts: float, limit: int) -> list[Path]:
+    """回傳 mtime > after_ts 的 session 檔案，依 mtime 升序，取最舊到最新的 limit 個。
+
+    Args:
+        sessions_dir: ~/.claude/projects/（遞迴掃所有子目錄）
+        after_ts:     Unix timestamp（上次 synthesis 時間），0.0 = 取最新 limit 個
+        limit:        最多回傳幾個 session
+
+    Returns:
+        list[Path]，mtime 升序（最舊在前，最新在後）
+    """
+    files = [
+        p for p in sessions_dir.rglob("*.jsonl")
+        if p.stat().st_mtime > after_ts
+    ]
+    files.sort(key=lambda p: p.stat().st_mtime)
+    return files[-limit:] if len(files) > limit else files
+
+
 # ── CLI 入口 ───────────────────────────────────────────────────
 
 def main():

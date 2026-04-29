@@ -434,6 +434,79 @@ def _append_evolution_log(log_path: Path, uuid: str, summary: str,
         append_log(log_path, entry)
 
 
+# ── Synthesis counter ─────────────────────────────────────────────
+
+def _increment_synth_counter(cfg: dict, uuid: str, dry_run: bool) -> None:
+    """evolve 每成功跑一次，計數器 +1。達到 sessions_per_cycle 時背景啟動 synthesize.py。
+
+    使用 FileLock 保護 synth_state.json，避免多個 evolve 進程同時寫入。
+    """
+    data_dir = Path(cfg["_root"]) / "data"
+    state_path = data_dir / "synth_state.json"
+    lock_path = data_dir / "synth_state.lock"
+    sessions_per_cycle = get_int(cfg, "synthesize", "sessions_per_cycle", default=10)
+
+    try:
+        with FileLock(lock_path, timeout=5):
+            raw = state_path.read_text(encoding="utf-8") if state_path.exists() else "{}"
+            try:
+                state = json.loads(raw)
+            except json.JSONDecodeError:
+                state = {}
+
+            counter = state.get("sessions_since_last_synth", 0) + 1
+            state["sessions_since_last_synth"] = counter
+
+            if dry_run:
+                print(f"[dry-run] synth counter would be: {counter}/{sessions_per_cycle}")
+            else:
+                state_path.write_text(
+                    json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
+                print(f"[evolve] synth counter: {counter}/{sessions_per_cycle}")
+
+            if counter >= sessions_per_cycle:
+                state["sessions_since_last_synth"] = 0
+                if not dry_run:
+                    state_path.write_text(
+                        json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8"
+                    )
+
+                synthesize_path = Path(cfg["_root"]) / "src" / "synthesize.py"
+                if not synthesize_path.exists():
+                    print("[evolve] synthesize.py not found, skipping", file=sys.stderr)
+                    return
+
+                nvm_latest = ""
+                nvm_dir = Path.home() / ".nvm" / "versions" / "node"
+                if nvm_dir.exists():
+                    versions = sorted(nvm_dir.glob("*/bin"), key=lambda p: p.parent.name)
+                    if versions:
+                        nvm_latest = str(versions[-1])
+
+                extra_paths = ":".join(p for p in [
+                    str(Path.home() / "AppData" / "Roaming" / "npm"),
+                    str(Path.home() / ".local" / "bin"),
+                    "/usr/local/bin", "/opt/homebrew/bin", nvm_latest,
+                ] if p)
+                env_path = extra_paths + ":" + subprocess.os.environ.get("PATH", "")
+
+                if dry_run:
+                    print("[dry-run] would launch synthesize.py in background")
+                else:
+                    subprocess.Popen(
+                        [sys.executable, str(synthesize_path)],
+                        cwd=cfg["_root"],
+                        env={**subprocess.os.environ, "PATH": env_path},
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    print("[evolve] synthesize.py launched in background")
+
+    except Exception as e:
+        print(f"[evolve] synth counter error (non-critical): {e}", file=sys.stderr)
+
+
 # ── 備份 ──────────────────────────────────────────────────────────
 
 def _run_backup(cfg: dict) -> None:
@@ -618,6 +691,9 @@ def run(dry_run: bool = False, skip_if_wrap_done: bool = False) -> int:
 
     # ── 備份 ─────────────────────────────────────────────────────
     _run_backup(cfg)
+
+    # ── Synthesis counter ─────────────────────────────────────────
+    _increment_synth_counter(cfg, uuid, dry_run)
 
     print("[evolve] done")
     return 0
