@@ -436,8 +436,8 @@ def _append_evolution_log(log_path: Path, uuid: str, summary: str,
 
 # ── Synthesis counter ─────────────────────────────────────────────
 
-def _increment_synth_counter(cfg: dict, uuid: str, dry_run: bool) -> None:
-    """evolve 每成功跑一次，計數器 +1。達到 sessions_per_cycle 時背景啟動 synthesize.py。
+def _increment_synth_counter(cfg: dict, dry_run: bool) -> None:
+    """evolve 每跑一次（含 wrap-skip），計數器 +1。達到 sessions_per_cycle 時背景啟動 synthesize.py。
 
     使用 FileLock 保護 synth_state.json，避免多個 evolve 進程同時寫入。
     """
@@ -555,6 +555,7 @@ def run(dry_run: bool = False, skip_if_wrap_done: bool = False) -> int:
         print("[evolve] wrap_done detected → skip (wrap already handled this session)")
         if not dry_run:
             wrap_done_path.unlink(missing_ok=True)
+        _increment_synth_counter(cfg, dry_run)
         return 0
 
     # ── 找目標 session ────────────────────────────────────────────
@@ -693,7 +694,7 @@ def run(dry_run: bool = False, skip_if_wrap_done: bool = False) -> int:
     _run_backup(cfg)
 
     # ── Synthesis counter ─────────────────────────────────────────
-    _increment_synth_counter(cfg, uuid, dry_run)
+    _increment_synth_counter(cfg, dry_run)
 
     print("[evolve] done")
     return 0
