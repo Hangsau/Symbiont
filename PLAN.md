@@ -594,3 +594,29 @@ M1–M8 完成、實際運行一段時間後做了一次完整可靠性審查，
 修補過程中段，spawn 給 Haiku 的 task（M4-A）prompt 沒禁止 git 操作。Haiku 跑了 `git pull --rebase + git reset` 把所有先前未 commit 的 src/ 修改吃掉。靠 codex CLI 的 session rollout（保存了所有 apply_patch 操作）寫了 `recovery/apply_patch.py` 還原 22/23 patches，剩餘手動補做。
 
 教訓：派 spawn agent 的 prompt 必須明確禁止 `git reset/pull/checkout/restore/stash drop/rebase`。`recovery/` 目錄保留搶救工具（OpenAI Apply Patch 解析器與套用器）供未來類似事件用。
+
+---
+
+## 十、Task 規劃流程（避免下一次 reliability pass）
+
+§九的 11 個 finding 不是「沒寫測試」造成（M4/M7/M8 都有單元測試），而是規劃時沒主動問結構性風險：並發、邊界、schema migration、外部輸入驗證、命令注入、跨狀態一致性。
+
+### 規範
+
+新功能 task 開始前必跑 `/plan-check` skill（位於 `~/.claude/skills/plan-check/SKILL.md`）。skill 已內建：
+
+- **步驟 4b 結構性風險清單**（程式變更必答 6 項）：寫不出答案的項目要當風險明確列出
+- **步驟 6 驗收標準對應**：4b 列了並發 → 必有 concurrency test；4b 列了 schema → 必有 migration test；pure function unit test 不算這幾類驗收
+
+### 觸發條件
+
+| 任務類型 | 必跑 `/plan-check`？ |
+|---------|---------------------|
+| 加新 daemon、改 state schema、引入跨進程通訊 | 必跑 |
+| 加 LLM call / 外部命令 / config 解析 | 必跑 |
+| 補測試、改文件、改 config 預設值 | 不必 |
+| bug fix（除非 fix 引入新並發 / schema 變動） | 不必 |
+
+### 與 §九 的關係
+
+§九的 19 task 全部都是這次審查找出來才補的——若當時各 milestone 規劃時跑過 `/plan-check`，4b 至少能擋掉一半（R1 並發、R2/R3 cursor 邊界、R5 staged commit、R7 命令注入）。下一個 milestone 起依此辦理。
