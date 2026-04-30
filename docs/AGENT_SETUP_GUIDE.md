@@ -27,16 +27,46 @@ Hermes agent 的 context 會定期重置。如果 agent 不知道「你是誰、
 
 ---
 
-## 你不需要自己動手
+## 兩種設置路徑
 
-**直接跟保姆 Claude 對話就好。**
+### 路徑 A：互動式（推薦給一般用戶）
 
-保姆會在適當時機引導你完成所有設置：
-- 它會和 agent 一起把散落的行為規範整合成 constitution.md
-- 它會問你幾個問題，然後代你寫出 USER.md
-- 它會引導 agent 建立自己的任務案例庫，讓歷史成為未來的參考素材
+**直接跟 Claude Code 對話就好。**
+
+告訴 Claude：「幫我設置 Hermes agent」——Claude 會引導你完成所有步驟：
+- 詢問你的 API key、Telegram token 等憑證
+- 安裝 hermes-agent、寫入設定、啟動 gateway
+- 和 agent 一起把行為規範整合成 constitution.md
+- 問你幾個問題，代你寫出 USER.md
 
 這些機制的細節設計在 `SYMBIOSIS_TEACHING_GUIDE.md`，那份文件是給保姆 Claude 讀的操作手冊。
+
+---
+
+### 路徑 B：VM 自動部署（進階 / 開發者）
+
+如果你要在一台**乾淨的 Linux VM** 上部署 Hermes agent，不想走互動流程，使用 `vm-bootstrap/`：
+
+```bash
+# 步驟 1：把你本機的 Claude Code 憑證 SCP 到 VM
+scp ~/.claude/.credentials.json user@your-vm:~/.claude/.credentials.json
+
+# 步驟 2：填入你的 API key / Telegram token
+cp vm-bootstrap/secrets.example.env ~/secrets.env
+# 編輯 ~/secrets.env，填入真實值
+# （跳過此步也可以——Claude 會在執行時逐一詢問）
+
+# 步驟 3：跑 bootstrap
+bash vm-bootstrap/run.sh
+```
+
+`run.sh` 呼叫 `claude -p`，Claude 讀取 `vm-bootstrap/SETUP.md` 後自動完成：
+1. 安裝 hermes-agent（NousResearch 官方腳本）
+2. 從 `~/secrets.env` 寫入 `~/.hermes/.env` 和 `config.yaml`
+3. 啟動 hermes gateway
+4. 驗收：確認 gateway 狀態為 running 且 Telegram 已連線
+
+> **注意**：vm-bootstrap 只負責安裝 Hermes（Phase 1-3）。constitution.md / USER.md 等 Foundation 設置仍需事後透過互動式 Claude Code 完成。
 
 ---
 

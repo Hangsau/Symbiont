@@ -91,7 +91,7 @@ synthesize:
   ctx_cap_chars: 12000             # 所有 session fragment 總字數上限
   friction_per_session: 1500       # 每 session 摩擦片段上限（chars）
   habit_per_session: 800           # 每 session 習慣片段上限（chars）
-  min_evidence_sessions: 3         # pattern 至少出現在幾個 session 才生成 skill
+  min_evidence_sessions: 5         # pattern 至少出現在幾個 session 才生成 skill
   skill_stdev_multiplier: 2.0      # 低於 mean - N×stdev 視為低使用率
   skill_low_cycles_to_delete: 2    # 連續幾次低使用率才刪除 skill
 

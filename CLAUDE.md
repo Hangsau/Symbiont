@@ -34,6 +34,10 @@ Symbiont/
 │   ├── state.json          # 記錄最後處理的 session uuid
 │   ├── synth_state.json    # synthesis 計數器 + skill 使用率 + distilled_mapping（gitignore）
 │   └── agents.yaml         # agent registry（gitignore，從 agents.example.yaml 複製）
+├── vm-bootstrap/
+│   ├── SETUP.md               # claude -p 執行用的安裝指令集（給 VM 端 Claude 讀）
+│   ├── secrets.example.env    # 憑證模板（複製為 ~/secrets.env 並填入真實值）
+│   └── run.sh                 # 啟動腳本（驗證 credentials + 呼叫 claude -p）
 ├── config.yaml             # 路徑、閾值設定
 └── run.bat                 # Windows Task Scheduler 入口
 ```
@@ -44,8 +48,8 @@ Symbiont/
 
 | 程式 | 輸入 | 輸出 | 排程 |
 |------|------|------|------|
-| `evolve.py` | 最新 .jsonl session log | CLAUDE.md 規則更新、evolution_log append | Stop hook 直接觸發（30秒延遲）；每 10 次後觸發 synthesize.py |
-| `synthesize.py` | 最近 N 個 session 的 friction + habit 片段 | `~/.claude/skills/` 新建或迭代 skill、memory/thoughts/ 洞見、knowledge/<type>/ 蒸餾知識、低使用率 skill 清掃 | 由 evolve.py 計數觸發（每 10 次 session） |
+| `evolve.py` | 最新 .jsonl session log | CLAUDE.md 規則更新、evolution_log append | Stop hook 寫 pending → Task Scheduler 每 1 分鐘 poll（Windows）；Mac/Linux 用 bash subshell 30秒延遲；每 10 次後觸發 synthesize.py |
+| `synthesize.py` | 最近 N 個 session 的 friction + habit 片段 + 現有 skill descriptions | `~/.claude/skills/` 新建或迭代 skill（quality_score < 2 跳過）、memory/thoughts/ 洞見、knowledge/<type>/ 蒸餾知識、低使用率 skill 清掃 | 由 evolve.py 計數觸發（每 10 次 session） |
 | `memory_audit.py` | memory/*.md 的 review_by 欄位 | archive 移動、MEMORY.md 更新 | 每天 02:00（Task Scheduler，開機補跑） |
 | `babysit.py` | for-claude/<agent>/ 新訊息 | claude-inbox/<agent>/ 回應 | 每 2 分鐘（Windows Service） |
 

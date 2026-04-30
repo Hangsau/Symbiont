@@ -144,6 +144,7 @@ Every 10 sessions, it:
 4. For each recurring pattern (appearing in 3+ sessions): generates a complete `SKILL.md` and writes it to `~/.claude/skills/<topic>/`
 5. Writes any cross-session insights to `memory/thoughts/`
 6. Tracks skill usage across cycles; removes skills that stay below 2 standard deviations of usage for 2+ consecutive cycles
+7. **Self-audit**: passes existing skill descriptions into the generation prompt so the model can detect redundancy before writing. Each generated pattern includes a `quality_score` (0–3) and `quality_reason`; skills scoring below 2 are logged but not written to disk
 
 **Three skill types generated:**
 
@@ -176,7 +177,7 @@ knowledge/KNOWLEDGE_TAGS.md  → grep index: grep "git" → relevant files
 synthesize:
   sessions_per_cycle: 10       # how many sessions before synthesis runs
   ctx_cap_chars: 12000         # total fragment size limit
-  min_evidence_sessions: 3     # pattern must appear in N sessions to generate a skill
+  min_evidence_sessions: 5     # pattern must appear in N sessions to generate a skill
   skill_stdev_multiplier: 2.0  # below mean - N×stdev = low-usage
   skill_low_cycles_to_delete: 2
 
@@ -269,6 +270,23 @@ For `evolve.py` and `memory_audit.py`, the Stop hook alone is sufficient — the
 
 **Connecting a Hermes agent for the first time?** Tell Claude: *"Help me connect my Hermes agent to Symbiont"* — Claude will read `docs/CHANNEL_PROTOCOL.md` and walk through the full setup including the inbox-watcher, extract_dialogue.py, and end-to-end verification.
 
+**Deploying a new Hermes agent on a VM from scratch?** Use `vm-bootstrap/`:
+
+```bash
+# On the VM (Arch Linux / any systemd Linux):
+# 1. SCP your Claude Code credentials from your local machine
+scp ~/.claude/.credentials.json user@your-vm:~/.claude/.credentials.json
+
+# 2. Fill in your API keys and Telegram token
+cp secrets.example.env ~/secrets.env
+nano ~/secrets.env   # or have Claude ask you interactively (skip this step)
+
+# 3. Run bootstrap — Claude installs Hermes, writes config, starts gateway
+bash vm-bootstrap/run.sh
+```
+
+`run.sh` calls `claude -p` with the full installation instructions in `SETUP.md`. Claude installs hermes-agent, writes `~/.hermes/.env` and `config.yaml`, starts the gateway, and verifies Telegram is connected — all unattended. If `~/secrets.env` is missing, Claude asks for each credential interactively before proceeding.
+
 ---
 
 ## File Layout
@@ -289,11 +307,18 @@ Symbiont/
 │       ├── claude_runner.py       # claude -p subprocess wrapper (cross-platform)
 │       ├── file_ops.py            # Atomic writes, file locking, log rotation
 │       └── transport.py           # SSH/SCP + local file I/O transport abstraction
+├── scripts/
+│   ├── run_evolve.py          # Task Scheduler wrapper: pythonw.exe, no window (Windows)
+│   └── symbiont-stop-hook.sh  # Stop hook script (copied to ~/.claude/scripts/ on install)
 ├── setup/
-│   ├── setup_windows.bat      # Install: pip + Task Scheduler + Stop hook
+│   ├── setup_windows.bat      # Install: pip + Task Scheduler (1-min poll) + Stop hook
 │   ├── setup_memory.bat/.sh   # Initialize memory/ skeleton
 │   ├── uninstall_windows.bat  # Remove: tasks + hook + flag files
 │   └── uninstall_mac.sh
+├── vm-bootstrap/
+│   ├── SETUP.md               # Executable prompt: claude -p reads this to install Hermes on a VM
+│   ├── secrets.example.env    # Credentials template (copy → ~/secrets.env, fill in real values)
+│   └── run.sh                 # Entry point: verifies auth, calls claude -p SETUP.md
 ├── docs/
 │   ├── COMMANDS.md                  # Claude-readable operations manual
 │   ├── CHANNEL_PROTOCOL.md          # Hermes agent channel setup + known pitfalls
@@ -343,16 +368,22 @@ Claude Code session ends
         ▼ (Stop hook → ~/.claude/settings.json)
 symbiont-stop-hook.sh
         ├── writes data/pending_evolve.txt
-        ├── writes data/pending_audit.txt
-        └── launches evolve.py in background (30s delay)
+        └── writes data/pending_audit.txt
+             (Windows: Task Scheduler handles the rest)
+             (Mac/Linux: also launches evolve.py in background after 30s)
 
-On startup (Task Scheduler):
-        ├── pending_evolve.txt exists → run evolve.py
+Every 1 minute (Task Scheduler — Windows only):
+        └── scripts/run_evolve.py (via pythonw.exe, no window)
+                └── pending_evolve.txt exists → run evolve.py → delete pending
+
+On login (Task Scheduler — memory audit):
         └── pending_audit.txt exists → run memory_audit.py
 
 Every 2 minutes (Task Scheduler):
         └── run babysit.py
 ```
+
+> **Windows note**: bash subshell background processes (`&`) are killed when the hook exits. Symbiont uses Task Scheduler + `pythonw.exe` (the windowless Python launcher) so there are no flash windows and no dropped processes.
 
 ---
 
