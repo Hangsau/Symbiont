@@ -125,12 +125,13 @@ if not exist "%AGENT_DIR%\data\state.json" echo {} > "%AGENT_DIR%\data\state.jso
 if not exist "%AGENT_DIR%\data\teaching_state" mkdir "%AGENT_DIR%\data\teaching_state"
 echo       完成
 
-REM ── 啟動 babysit daemon（若 agents.yaml 存在）────────────────────
+REM ── 立即跑一輪 babysit（若 agents.yaml 存在）────────────────────
+REM 避免等 Task Scheduler 首輪（最多 2 分鐘）；single-pass 與 Task Scheduler 機制一致
 if exist "%AGENT_DIR%\data\agents.yaml" (
     echo.
-    echo [啟動] babysit daemon 啟動中...
-    start "" /min python src\babysit.py --daemon
-    echo       babysit 已在背景執行
+    echo [啟動] babysit 首輪執行中（Task Scheduler 之後接手）...
+    start "" /B "%PYTHONW%" "%AGENT_DIR%\scripts\run_babysit.py"
+    echo       babysit 首輪已在背景執行
 )
 
 REM ── 完成 ─────────────────────────────────────────────────────────
