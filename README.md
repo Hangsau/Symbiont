@@ -144,6 +144,7 @@ Every 10 sessions, it:
 4. For each recurring pattern (appearing in 3+ sessions): generates a complete `SKILL.md` and writes it to `~/.claude/skills/<topic>/`
 5. Writes any cross-session insights to `memory/thoughts/`
 6. Tracks skill usage across cycles; removes skills that stay below 2 standard deviations of usage for 2+ consecutive cycles
+7. **Self-audit**: passes existing skill descriptions into the generation prompt so the model can detect redundancy before writing. Each generated pattern includes a `quality_score` (0–3) and `quality_reason`; skills scoring below 2 are logged but not written to disk
 
 **Three skill types generated:**
 
