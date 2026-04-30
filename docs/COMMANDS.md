@@ -24,28 +24,19 @@
 **Claude 執行**：
 1. 確認 `data/agents.yaml` 存在（若不存在，從 `data/agents.example.yaml` 複製並填入設定）
 2. 確認 `data/agents.yaml` 的 agent 設定正確（ssh_key、ssh_host、inbox_remote 等）
-3. 啟動 daemon（Windows）：
+3. 確認 Task Scheduler 任務已建立（執行過 `setup/setup_windows.bat` 即自動建立）：
    ```powershell
-   # 找到 pythonw.exe 路徑（通常在此）
-   $pw = "$env:LOCALAPPDATA\Programs\Python\Python312\pythonw.exe"
-   # 啟動無視窗常駐 daemon
-   Start-Process $pw -ArgumentList "src\babysit.py","--daemon" -WorkingDirectory "[Symbiont路徑]"
+   Get-ScheduledTask -TaskName "symbiont-babysit"
    ```
-4. 設定開機自動啟動：將以下內容存成 `start-babysit.bat`，放入 Windows Startup 資料夾（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`）：
-   ```batch
-   @echo off
-   set "PYTHONW=[pythonw.exe 完整路徑]"
-   cd /d "[Symbiont路徑]"
-   start "" "%PYTHONW%" src\babysit.py --daemon
-   ```
-5. 驗證（等 10 秒後查 log）：
+   若不存在，重新執行 `setup/setup_windows.bat`（需先確認 `data/agents.yaml` 存在）。
+4. 驗證（等 2 分鐘後查 log）：
    ```bash
-   tail -3 data/error.log   # 應看到 [babysit] daemon 啟動 ...
+   tail -3 data/babysit_hook.log   # 應看到 babysit 執行記錄
    ```
 
-> **注意**：babysit 需要電腦開著才能執行。如需 24/7，考慮移至 VM。
+> **注意**：babysit 由 Task Scheduler 每 2 分鐘自動觸發，無需手動啟動 daemon。
 > **SSH key**：確認 `~/.ssh/id_ed25519` 存在，且可連線至 agent 所在主機。
-> **pythonw.exe**：使用 pythonw 而非 python，才能在背景執行不出現 console 視窗。
+> **24/7 執行**：Task Scheduler 只在電腦開著時跑，如需持續運行考慮移至 VM。
 
 ---
 
@@ -55,10 +46,10 @@
 
 **Claude 執行**：
 ```powershell
-# 停止正在執行的 daemon
-Get-Process -Name "pythonw" -ErrorAction SilentlyContinue | Stop-Process -Force
-# 移除開機自動啟動（若有設定）
-Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\start-babysit.bat" -ErrorAction SilentlyContinue
+# 停用 Task Scheduler 任務（暫停）
+schtasks /Change /TN "symbiont-babysit" /DISABLE
+# 或永久移除
+schtasks /Delete /TN "symbiont-babysit" /F
 ```
 
 ---
@@ -206,8 +197,13 @@ python src/babysit.py             # 確認後真實執行
 
 **Claude 執行**：
 1. 執行 `setup/setup_memory.bat`（Windows）或 `setup/setup_memory.sh`（Mac）
-   - 腳本會建立 memory/ 目錄骨架並自動設 `enabled: true`
-2. 驗證：`python src/memory_audit.py --dry-run`
+   - 腳本會建立 memory/ 目錄骨架並設 `enabled: true`
+2. 確認 Task Scheduler 任務已建立（`setup_windows.bat` 執行後自動建立）：
+   ```powershell
+   Get-ScheduledTask -TaskName "symbiont-memory-audit"
+   ```
+   任務在每次登入時執行 `scripts/run_audit.py`（有 pending_audit.txt 時執行）。
+3. 驗證：`python src/memory_audit.py --dry-run`
 
 ---
 

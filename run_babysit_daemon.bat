@@ -1,3 +1,7 @@
 @echo off
 cd /d "%~dp0"
-start "" /min python src\babysit.py --daemon
+for /f "delims=" %%i in ('where pythonw.exe 2^>nul') do set "PYTHONW=%%i"
+if not defined PYTHONW (
+    for /f "delims=" %%i in ('where python.exe 2^>nul') do set "PYTHONW=%%i"
+)
+start "" "%PYTHONW%" src\babysit.py --daemon

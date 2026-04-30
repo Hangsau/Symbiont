@@ -308,8 +308,11 @@ Symbiont/
 │       ├── file_ops.py            # Atomic writes, file locking, log rotation
 │       └── transport.py           # SSH/SCP + local file I/O transport abstraction
 ├── scripts/
-│   ├── run_evolve.py          # Task Scheduler wrapper: pythonw.exe, no window (Windows)
-│   └── symbiont-stop-hook.sh  # Stop hook script (copied to ~/.claude/scripts/ on install)
+│   ├── trigger-evolve.py      # Stop hook: writes pending flag files only (no subprocess)
+│   ├── run_evolve.py          # Task Scheduler wrapper: polls pending_evolve.txt every 1 min (pythonw.exe, no window)
+│   ├── run_audit.py           # Task Scheduler wrapper: polls pending_audit.txt at login (pythonw.exe, no window)
+│   ├── run_babysit.py         # Task Scheduler wrapper: runs babysit.py every 2 min (pythonw.exe, no window)
+│   └── symbiont-stop-hook.sh  # Stop hook script for Mac/Linux (copied to ~/.claude/scripts/ on install)
 ├── setup/
 │   ├── setup_windows.bat      # Install: pip + Task Scheduler (1-min poll) + Stop hook
 │   ├── setup_memory.bat/.sh   # Initialize memory/ skeleton

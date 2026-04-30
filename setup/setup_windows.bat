@@ -85,28 +85,28 @@ if %ERRORLEVEL% EQU 0 (
     echo [警告] symbiont-evolve Task Scheduler 設定失敗（可手動執行）
 )
 
-REM memory_audit 補跑：開機時若 pending_audit.txt 存在才跑
-set "AUDIT_CMD=cmd /c if exist \"%AGENT_DIR%\data\pending_audit.txt\" (cd /d \"%AGENT_DIR%\" ^& python src\memory_audit.py)"
+REM memory_audit 補跑：開機時若 pending_audit.txt 存在才跑（pythonw.exe = 無視窗）
+set "AUDIT_CMD=\"%PYTHONW%\" \"%AGENT_DIR%\scripts\run_audit.py\""
 
 schtasks /Query /TN "symbiont-memory-audit" >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     schtasks /Delete /TN "symbiont-memory-audit" /F >nul 2>&1
 )
-schtasks /Create /TN "symbiont-memory-audit" /TR "%AUDIT_CMD%" /SC ONLOGON /DELAY 0002:30 /RU "%USERNAME%" /F >nul
+schtasks /Create /TN "symbiont-memory-audit" /TR %AUDIT_CMD% /SC ONLOGON /DELAY 0002:30 /RU "%USERNAME%" /F >nul
 if %ERRORLEVEL% EQU 0 (
     echo       symbiont-memory-audit 已設定（登入後 2.5 分鐘補跑）
 ) else (
     echo [警告] symbiont-memory-audit Task Scheduler 設定失敗（可手動執行）
 )
 
-REM babysit 每 2 分鐘（若 agents.yaml 存在才設定）
+REM babysit 每 2 分鐘（若 agents.yaml 存在才設定；pythonw.exe = 無視窗）
 if exist "%AGENT_DIR%\data\agents.yaml" (
-    set "BABYSIT_CMD=wscript //B \"%AGENT_DIR%\run_silent.vbs\" babysit"
+    set "BABYSIT_CMD=\"%PYTHONW%\" \"%AGENT_DIR%\scripts\run_babysit.py\""
     schtasks /Query /TN "symbiont-babysit" >nul 2>&1
     if %ERRORLEVEL% EQU 0 (
         schtasks /Delete /TN "symbiont-babysit" /F >nul 2>&1
     )
-    schtasks /Create /TN "symbiont-babysit" /TR "!BABYSIT_CMD!" /SC MINUTE /MO 2 /F >nul
+    schtasks /Create /TN "symbiont-babysit" /TR %BABYSIT_CMD% /SC MINUTE /MO 2 /RU "%USERNAME%" /F >nul
     if %ERRORLEVEL% EQU 0 (
         echo       symbiont-babysit 已設定（每 2 分鐘）
     ) else (
