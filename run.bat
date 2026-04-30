@@ -8,9 +8,9 @@
 ::   run.bat babysit
 ::
 :: Task Scheduler 範例（開機補跑 evolve）：
-::   Action: C:\claudehome\projects\Symbiont\run.bat
+::   Action: <Symbiont 安裝路徑>\run.bat
 ::   Arguments: evolve
-::   Start in: C:\claudehome\projects\Symbiont
+::   Start in: <Symbiont 安裝路徑>
 
 :: ── 確保 claude CLI 在 PATH ────────────────────────────────────
 :: 優先找 npm global（winget/npm 安裝路徑）

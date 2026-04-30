@@ -22,8 +22,9 @@ else
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     # ~/.claude/scripts/ → 往上找 local-agent（支援常見安裝位置）
     CANDIDATES=(
-        "$HOME/claudehome/projects/local-agent"
+        "$HOME/projects/Symbiont"
         "$HOME/projects/local-agent"
+        "$HOME/Symbiont"
         "$HOME/local-agent"
     )
     AGENT_DIR=""

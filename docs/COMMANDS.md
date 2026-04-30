@@ -388,7 +388,7 @@ for src, dest in list(mapping.items())[:10]:
 
 **Claude 執行**：
 - 編輯 `config.yaml`，將 `paths.primary_project` 改為指定路徑
-- 例：`primary_project: "C:/claudehome"` 或 `primary_project: "/Users/xxx/myproject"`
+- 例：`primary_project: "C:/projects/myproject"` 或 `primary_project: "/Users/xxx/myproject"`
 
 ---
 

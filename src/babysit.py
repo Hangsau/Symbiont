@@ -391,7 +391,7 @@ def _process_inbox(agent_name: str, agent_cfg: dict, transport,
         if ok:
             append_log(base_dir / LOG_FILE, f"[{agent_name}] 回應已送出 → {filename}")
             agent_state.last_reply_ts = float(ts)
-            # 送出後啟動 teaching loop：等 Talos 從 claude-dialogues/ 回來
+            # 送出後啟動 teaching loop：等 agent 從 claude-dialogues/ 回來
             ts_file = agent_cfg.get("teaching_state_file",
                                     f"data/teaching_state/{agent_name}.json")
             teaching_state = _load_teaching_state(base_dir, ts_file)

@@ -19,8 +19,8 @@ paths:
   #   3. 自動偵測：掃 claude_projects_base，取最近有 session 的子目錄
   #
   # 範例：
-  #   Windows：primary_project: "C:/claudehome"
-  #   Mac：    primary_project: "/Users/xxx/claudehome"
+  #   Windows：primary_project: "C:/projects/myproject"
+  #   Mac：    primary_project: "/Users/xxx/myproject"
   #   留空讓程式自動偵測：primary_project: ""
   primary_project: ""
 
@@ -72,7 +72,7 @@ session_reader:
   max_turns: 50          # 只取最後 N 輪，避免 prompt 過長
 
 memory_audit:
-  enabled: true                    # 自動維護 memory/；設 false 可停用
+  enabled: false                   # 自動維護 memory/；改 true 啟用
   auto_archive: true               # false = 只報告不移動任何檔案
   thoughts_archive_threshold: 30   # thoughts/ 超過此數量 → 最舊 10 條移至 archive
   memory_index_warn_lines: 170     # MEMORY.md 超過此行數 → 輸出警告

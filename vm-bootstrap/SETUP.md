@@ -1,4 +1,4 @@
-# Hestia VM Bootstrap - Hermes Agent 安裝
+# Hermes Agent VM Bootstrap
 
 你正在一台 Arch Linux VM 上設置 Hermes AI agent。照以下步驟執行，每步完成後確認結果再繼續。
 
@@ -71,7 +71,7 @@ fallback_providers:
     provider: gemini
 
 telegram:
-  allowed_users: <TELEGRAM_ALLOWED_USERS 的數字值，例如：8636326243>
+  allowed_users: <TELEGRAM_ALLOWED_USERS 的數字值，純整數>
   enabled: true
 ```
 注意：`allowed_users` 必須是整數，不要加引號。
@@ -117,7 +117,7 @@ cat ~/.hermes/gateway_state.json
 
 完成所有步驟後，輸出：
 ```
-=== Hestia Bootstrap 完成 ===
+=== Bootstrap 完成 ===
 [Gateway 狀態摘要]
 [成功 / 失敗及具體原因]
 ```

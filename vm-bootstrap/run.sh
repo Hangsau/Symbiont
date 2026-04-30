@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hestia VM bootstrap：用 claude -p 自動安裝並啟動 Hermes agent
+# Hermes Agent VM bootstrap：用 claude -p 自動安裝並啟動 Hermes agent
 #
 # 使用方式：bash run.sh
 #
@@ -27,7 +27,7 @@ if [ ! -f "$HOME/.claude/.credentials.json" ]; then
     echo ""
     echo "Claude Code 需要認證才能執行。請先在本機執行："
     echo ""
-    echo "  scp -i ~/.ssh/id_ed25519 ~/.claude/.credentials.json root@localhost -P 2223:~/.claude/.credentials.json"
+    echo "  scp -i ~/.ssh/id_ed25519 ~/.claude/.credentials.json user@your-vm:~/.claude/.credentials.json"
     echo ""
     echo "或在 VM 上首次執行 'claude -p \"hello\"' 來完成互動式登入。"
     exit 1
@@ -40,7 +40,7 @@ if ! command -v claude &> /dev/null; then
     exit 1
 fi
 
-echo "=== Hestia Bootstrap: 啟動 Hermes Agent 設置 ==="
+echo "=== Hermes Agent VM Bootstrap: 啟動設置 ==="
 echo "SETUP.md: $SETUP_FILE"
 echo ""
 

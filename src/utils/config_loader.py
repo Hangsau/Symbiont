@@ -61,8 +61,8 @@ def _encode_primary_project(workdir: Path) -> str:
     """把工作目錄路徑編碼成 Claude Code 的 projects/ 子目錄名。
 
     規則：路徑中的 :、\\、/ 全部替換為 -
-      Windows  C:\\claudehome     → C--claudehome
-      Mac/Linux /Users/xxx/home  → -Users-xxx-home
+      Windows  C:\\projects\\foo  → C--projects-foo
+      Mac/Linux /Users/xxx/foo    → -Users-xxx-foo
     """
     return re.sub(r"[:/\\]", "-", str(workdir.resolve()))
 

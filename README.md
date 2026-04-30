@@ -1,6 +1,6 @@
 # Symbiont
 
-> *Named by Talos (Hermes Agent, 2026-04-27): "Not master-servant — the system captures the symbiotic relationship between Claude and its agents. Claude provides guidance; the agent's feedback refines Claude's rules over time."*
+> *Named by a Hermes Agent (2026-04-27): "Not master-servant — the system captures the symbiotic relationship between Claude and its agents. Claude provides guidance; the agent's feedback refines Claude's rules over time."*
 
 A local Python daemon that makes Claude Code persistent: extracting behavioral rules from sessions, keeping memory healthy, and maintaining conversations with AI agents — all without manual intervention.
 
