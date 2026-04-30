@@ -331,8 +331,7 @@ Symbiont/
 ├── data/
 │   └── agents.example.yaml    # Agent registry template (copy → agents.yaml)
 ├── config.yaml                # All paths and thresholds
-├── run_babysit_daemon.bat     # Non-admin daemon launcher (Windows Startup folder)
-└── PLAN.md                    # Architecture decisions and milestone history
+└── run_babysit_daemon.bat     # Non-admin daemon launcher (Windows Startup folder)
 ```
 
 ---
@@ -415,14 +414,14 @@ Typical impact on a Claude subscription: negligible for `evolve.py` alone (2–3
 
 ## Reliability & Test Coverage
 
-Symbiont went through a focused reliability hardening pass on 2026-04-30 (see `docs/IMPROVEMENT_PLAN.md` and `docs/CODE_REVIEW_FINDINGS.md` for the audit and the resulting 18-task plan).
+Symbiont went through a focused reliability hardening pass on 2026-04-30.
 
 **Concurrency**
 - All daemons use atomic `FileLock` (`O_CREAT | O_EXCL`); no more check-then-write races on babysit lock or memory index.
-- A shared `data/memory.lock` synchronises `memory_audit.py` and `synthesize.py` writes to `MEMORY.md`, `memory/`, and `knowledge/`. Lock order is documented in `docs/MEMORY_LOCK_PROTOCOL.md`.
+- A shared `data/memory.lock` synchronises `memory_audit.py` and `synthesize.py` writes to `MEMORY.md`, `memory/`, and `knowledge/`.
 
 **State integrity**
-- `evolve.py` and `synthesize.py` use a v2 cursor schema (`processed_recent[50]`, `last_synth_session_mtime`) so backlogs are processed without loss or duplication. Schema and migration rules in `docs/STATE_SCHEMA_V2.md`.
+- `evolve.py` and `synthesize.py` use a v2 cursor schema (`processed_recent[50]`, `last_synth_session_mtime`) so backlogs are processed without loss or duplication.
 - `synthesize.py` does staged commit per phase (patterns / memories / distill / prune / log); a crash mid-run resumes from the failed phase without re-invoking the LLM.
 
 **Input validation**
@@ -438,7 +437,7 @@ Symbiont went through a focused reliability hardening pass on 2026-04-30 (see `d
 - Cross-session synthesis quality (skill generation accuracy, deduplication effectiveness over months)
 - Dead letter queue retry behaviour under prolonged transport outages
 - Memory distillation tier transitions over multi-month timescales
-- `synth_state.json` concurrent writes are by-design single-writer (see `MEMORY_LOCK_PROTOCOL.md` §9); evolve+synthesize true-parallel race is theoretically possible but practically rare.
+- `synth_state.json` concurrent writes are by-design single-writer; evolve+synthesize true-parallel race is theoretically possible but practically rare.
 
 ---
 
