@@ -35,22 +35,21 @@ echo.
 echo [2/4] 設定 Stop hook（~\.claude\settings.json）...
 
 set "SETTINGS=%USERPROFILE%\.claude\settings.json"
-set "HOOK_SCRIPT=%USERPROFILE%\.claude\scripts\symbiont-stop-hook.sh"
-REM 將 AGENT_DIR 寫入 hook 的環境變數，確保路徑正確
 set "ADD_HOOK_PY=%TEMP%\add_symbiont_hook.py"
 
 > "%ADD_HOOK_PY%" (
-    echo import json, pathlib, sys
+    echo import json, os, pathlib, sys
     echo p = pathlib.Path(r"%SETTINGS%"^)
-    echo hook_cmd = r'LOCAL_AGENT_DIR=\"%AGENT_DIR:\=/%\" bash \"%USERPROFILE:\=/%/.claude/scripts/symbiont-stop-hook.sh\"'
+    echo pythonw = os.path.join(os.path.dirname(sys.executable^), "pythonw.exe"^).replace("\\", "/"^)
+    echo agent_dir = r"%AGENT_DIR:\=/%"
+    echo hook_cmd = f'"{pythonw}" "{agent_dir}/scripts/trigger-evolve.py"'
     echo if not p.exists(^):
     echo     cfg = {}
     echo else:
     echo     cfg = json.loads(p.read_text(encoding="utf-8"^)^)
     echo hooks = cfg.setdefault("hooks", {^}^)
     echo stop_hooks = hooks.setdefault("Stop", []^)
-    echo # 避免重複加入
-    echo already = any("symbiont-stop-hook" in str(h^) for h in stop_hooks^)
+    echo already = any("trigger-evolve" in str(h^) for h in stop_hooks^)
     echo if already:
     echo     print("       Stop hook 已存在，略過")
     echo     sys.exit(0^)
@@ -67,16 +66,21 @@ REM ── 3. Task Scheduler — evolve 補跑 + babysit 每 2 分鐘 ───�
 echo.
 echo [3/4] 設定 Task Scheduler...
 
-REM evolve 補跑：開機時若 pending_evolve.txt 存在才跑
-set "EVOLVE_CMD=cmd /c if exist \"%AGENT_DIR%\data\pending_evolve.txt\" (cd /d \"%AGENT_DIR%\" ^& python src\evolve.py)"
+REM evolve：每 1 分鐘用 pythonw.exe 靜默檢查 pending_evolve.txt，有才跑
+REM pythonw.exe = 無視窗 Python；路徑由 where 動態解析
+for /f "delims=" %%i in ('where pythonw.exe 2^>nul') do set "PYTHONW=%%i"
+if not defined PYTHONW (
+    for /f "delims=" %%i in ('where python.exe 2^>nul') do set "PYTHONW=%%i"
+)
+set "EVOLVE_CMD=\"%PYTHONW%\" \"%AGENT_DIR%\scripts\run_evolve.py\""
 
 schtasks /Query /TN "symbiont-evolve" >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     schtasks /Delete /TN "symbiont-evolve" /F >nul 2>&1
 )
-schtasks /Create /TN "symbiont-evolve" /TR "%EVOLVE_CMD%" /SC ONLOGON /DELAY 0002:00 /RU "%USERNAME%" /F >nul
+schtasks /Create /TN "symbiont-evolve" /TR %EVOLVE_CMD% /SC MINUTE /MO 1 /RU "%USERNAME%" /F >nul
 if %ERRORLEVEL% EQU 0 (
-    echo       symbiont-evolve 已設定（登入後 2 分鐘補跑）
+    echo       symbiont-evolve 已設定（每 1 分鐘靜默 poll，無視窗）
 ) else (
     echo [警告] symbiont-evolve Task Scheduler 設定失敗（可手動執行）
 )
