@@ -44,6 +44,32 @@ from src.utils.knowledge_writer import (
 
 SYNTH_STATE_KEY = "synthesize"
 MAX_TURNS_PER_SESSION = 50
+_EXISTING_SKILL_MAX = 30       # 最多讀幾個現有 skill
+_EXISTING_SKILL_DESC_CHARS = 80  # 每條 description 截斷字數
+_QUALITY_SCORE_MIN = 2         # 低於此分數的 skill 不寫入
+
+
+# ── 現有 skill 描述載入 ───────────────────────────────────────────
+
+def _load_existing_skill_descriptions(skills_dir: Path) -> str:
+    """掃 skills_dir/*/SKILL.md，提取 name + description，供 prompt 判斷重複。"""
+    if not skills_dir.exists():
+        return "（無現有 skill）"
+    lines: list[str] = []
+    for skill_path in sorted(skills_dir.glob("*/SKILL.md")):
+        try:
+            text = skill_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        name_match = re.search(r"^name:\s*(.+)$", text, re.MULTILINE)
+        desc_match = re.search(r"^description:\s*(.+)$", text, re.MULTILINE)
+        if name_match and desc_match:
+            name = name_match.group(1).strip()
+            desc = desc_match.group(1).strip()[:_EXISTING_SKILL_DESC_CHARS]
+            lines.append(f"- {name}: {desc}")
+        if len(lines) >= _EXISTING_SKILL_MAX:
+            break
+    return "\n".join(lines) if lines else "（無現有 skill）"
 
 
 # ── synth_state.json 操作 ─────────────────────────────────────────
@@ -153,6 +179,12 @@ SYNTHESIS_PROMPT = """\
   - audit：完成後的品質驗收（來自習慣片段）
 - skill_content 欄位中的換行必須寫成 \\n（不能有真正的換行符號）
 - 若無足夠 pattern，patterns 回傳空陣列
+- 對每個 pattern 評估 quality_score（0-3）：
+  - 3：觸發條件具體（有明確信號詞）且包含至少一個可執行步驟（指令/程式碼/具體動作）
+  - 2：可用，但觸發條件模糊或步驟過於抽象
+  - 1：與現有 skill 清單中某條高度重疊，或內容只有原則性說明沒有任何可執行步驟
+  - 0：完全冗餘或無意義
+- quality_score ≤ 1 的 pattern 仍要輸出（供記錄），但不會被寫入系統
 
 ## 摩擦片段（Guard skill 原料）
 {friction_text}
@@ -160,8 +192,8 @@ SYNTHESIS_PROMPT = """\
 ## 習慣片段（Workflow/Audit skill 原料）
 {habit_text}
 
-## 已知 skill topics（避免重複命名）
-{known_topics}
+## 現有 skill 清單（比對重複或冗餘）
+{existing_skills}
 
 ## 輸出格式（只輸出 JSON，不含任何解釋文字）
 ```json
@@ -172,6 +204,8 @@ SYNTHESIS_PROMPT = """\
       "pattern_type": "guard",
       "evidence_sessions": 4,
       "root_cause": "execution-forget",
+      "quality_score": 3,
+      "quality_reason": "觸發條件具體，步驟包含可執行 bash 指令",
       "skill_content": "---\\nname: topic-name\\ndescription: 一句話說明\\ntrigger: /topic-name\\ntype: guard\\nauto_generated: true\\niteration: 1\\n---\\n\\n具體的 skill 內容..."
     }}
   ],
@@ -187,16 +221,15 @@ SYNTHESIS_PROMPT = """\
 """
 
 
-def _build_synthesis_prompt(friction: str, habit: str, known_topics: list[str],
+def _build_synthesis_prompt(friction: str, habit: str, existing_skills: str,
                             min_evidence: int = 3) -> str:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    topics_str = ", ".join(known_topics) if known_topics else "（無）"
     friction_str = friction if friction else "（本次 sessions 無摩擦片段）"
     habit_str = habit if habit else "（本次 sessions 無習慣片段）"
     return SYNTHESIS_PROMPT.format(
         friction_text=friction_str,
         habit_text=habit_str,
-        known_topics=topics_str,
+        existing_skills=existing_skills,
         today=today,
         min_evidence=min_evidence,
     )
@@ -686,9 +719,9 @@ def run(dry_run: bool = False) -> int:
     print(f"[synthesize] skill usages this cycle: {skill_usages}")
 
     # ── 組 prompt → LLM ──────────────────────────────────────────
-    known_topics = list(state.get("skill_stats", {}).keys())
     min_evidence = get_int(cfg, SYNTH_STATE_KEY, "min_evidence_sessions", default=3)
-    prompt = _build_synthesis_prompt(friction_text, habit_text, known_topics, min_evidence)
+    existing_skills = _load_existing_skill_descriptions(skills_dir)
+    prompt = _build_synthesis_prompt(friction_text, habit_text, existing_skills, min_evidence)
 
     if dry_run:
         print("[dry-run] prompt preview (first 600 chars):")
@@ -725,6 +758,13 @@ def run(dry_run: bool = False) -> int:
         topic = pattern.get("topic", "").strip()
         skill_content = pattern.get("skill_content", "").strip()
         if not topic or not skill_content:
+            continue
+
+        # quality gate
+        quality_score = int(pattern.get("quality_score", 3))
+        quality_reason = pattern.get("quality_reason", "未說明")
+        if quality_score < _QUALITY_SCORE_MIN:
+            print(f"[synthesize] skipped low-quality skill: {topic} (score={quality_score}, {quality_reason})")
             continue
 
         # 計算 iteration
