@@ -270,6 +270,23 @@ For `evolve.py` and `memory_audit.py`, the Stop hook alone is sufficient — the
 
 **Connecting a Hermes agent for the first time?** Tell Claude: *"Help me connect my Hermes agent to Symbiont"* — Claude will read `docs/CHANNEL_PROTOCOL.md` and walk through the full setup including the inbox-watcher, extract_dialogue.py, and end-to-end verification.
 
+**Deploying a new Hermes agent on a VM from scratch?** Use `vm-bootstrap/`:
+
+```bash
+# On the VM (Arch Linux / any systemd Linux):
+# 1. SCP your Claude Code credentials from your local machine
+scp ~/.claude/.credentials.json user@your-vm:~/.claude/.credentials.json
+
+# 2. Fill in your API keys and Telegram token
+cp secrets.example.env ~/secrets.env
+nano ~/secrets.env   # or have Claude ask you interactively (skip this step)
+
+# 3. Run bootstrap — Claude installs Hermes, writes config, starts gateway
+bash vm-bootstrap/run.sh
+```
+
+`run.sh` calls `claude -p` with the full installation instructions in `SETUP.md`. Claude installs hermes-agent, writes `~/.hermes/.env` and `config.yaml`, starts the gateway, and verifies Telegram is connected — all unattended. If `~/secrets.env` is missing, Claude asks for each credential interactively before proceeding.
+
 ---
 
 ## File Layout
@@ -298,6 +315,10 @@ Symbiont/
 │   ├── setup_memory.bat/.sh   # Initialize memory/ skeleton
 │   ├── uninstall_windows.bat  # Remove: tasks + hook + flag files
 │   └── uninstall_mac.sh
+├── vm-bootstrap/
+│   ├── SETUP.md               # Executable prompt: claude -p reads this to install Hermes on a VM
+│   ├── secrets.example.env    # Credentials template (copy → ~/secrets.env, fill in real values)
+│   └── run.sh                 # Entry point: verifies auth, calls claude -p SETUP.md
 ├── docs/
 │   ├── COMMANDS.md                  # Claude-readable operations manual
 │   ├── CHANNEL_PROTOCOL.md          # Hermes agent channel setup + known pitfalls

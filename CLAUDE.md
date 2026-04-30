@@ -34,6 +34,10 @@ Symbiont/
 │   ├── state.json          # 記錄最後處理的 session uuid
 │   ├── synth_state.json    # synthesis 計數器 + skill 使用率 + distilled_mapping（gitignore）
 │   └── agents.yaml         # agent registry（gitignore，從 agents.example.yaml 複製）
+├── vm-bootstrap/
+│   ├── SETUP.md               # claude -p 執行用的安裝指令集（給 VM 端 Claude 讀）
+│   ├── secrets.example.env    # 憑證模板（複製為 ~/secrets.env 並填入真實值）
+│   └── run.sh                 # 啟動腳本（驗證 credentials + 呼叫 claude -p）
 ├── config.yaml             # 路徑、閾值設定
 └── run.bat                 # Windows Task Scheduler 入口
 ```
