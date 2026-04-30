@@ -29,10 +29,15 @@ Symbiont/
 │       ├── turn_utils.py          # 共用：extract_context()
 │       ├── knowledge_writer.py    # knowledge/ 寫入、KNOWLEDGE_TAGS.md 維護、distilled 搬移
 │       ├── claude_runner.py       # claude -p subprocess 封裝
-│       └── file_ops.py            # 安全讀寫（含 file lock）
+│       ├── config_loader.py       # 路徑/設定載入（auto-detect warning）
+│       ├── transport.py           # SSH/Local agent transport（含 _quote_remote_path）
+│       └── file_ops.py            # 安全讀寫 + FileLock（O_CREAT | O_EXCL）
+├── tests/                  # pytest 整合測試（102 條，含並發 / 階段化 / quoting）
 ├── data/
-│   ├── state.json          # 記錄最後處理的 session uuid
-│   ├── synth_state.json    # synthesis 計數器 + skill 使用率 + distilled_mapping（gitignore）
+│   ├── state.json          # evolve cursor v2（last_processed_mtime + processed_recent[50]）
+│   ├── synth_state.json    # synthesis cursor v2 + staged commit 欄位（gitignore）
+│   ├── memory.lock         # 自動建立：memory_audit / synthesize 共用鎖
+│   ├── babysit.lock        # 自動建立：babysit 並發保護
 │   └── agents.yaml         # agent registry（gitignore，從 agents.example.yaml 複製）
 ├── scripts/
 │   ├── trigger-evolve.py      # Stop hook：寫三個 pending .txt 旗標，純檔案操作
@@ -44,6 +49,8 @@ Symbiont/
 │   ├── SETUP.md               # claude -p 執行用的安裝指令集（給 VM 端 Claude 讀）
 │   ├── secrets.example.env    # 憑證模板（複製為 ~/secrets.env 並填入真實值）
 │   └── run.sh                 # 啟動腳本（驗證 credentials + 呼叫 claude -p）
+├── recovery/                  # 事件搶救工具（OpenAI Apply Patch 解析器）
+│   ├── apply_patch.py / apply_all.py / README.md
 ├── config.yaml             # 路徑、閾值設定
 └── run.bat                 # Windows Task Scheduler 入口
 ```

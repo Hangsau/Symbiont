@@ -463,6 +463,42 @@ schtasks /Query /TN "symbiont-babysit"
 setup/setup_windows.bat
 ```
 
+### synthesize 跑兩次但 patterns 階段只跑一次
+
+**原因**：staged commit 的 resume 行為。上次某個階段失敗、`current_run_id` 沒被清掉，下次會 skip 已 done 階段、從失敗階段續跑。
+
+**確認**：
+```bash
+python -c "
+import json
+state = json.loads(open('data/synth_state.json', encoding='utf-8').read())
+print('current_run_id:', state.get('current_run_id'))
+print('patterns_done_at:', state.get('patterns_done_at'))
+print('memories_done_at:', state.get('memories_done_at'))
+print('distill_done_at:', state.get('distill_done_at'))
+print('prune_done_at:', state.get('prune_done_at'))
+print('log_done_at:', state.get('log_done_at'))
+"
+```
+
+**處理**：正常跑第二次會接著做完。若想強制重跑整輪：手動把 `current_run_id` 與所有 `*_done_at` 設為 null。
+
+### memory_audit 沒做事就退出
+
+**原因**：`memory.lock` 被 synthesize 持有時，audit 會印 `[memory_audit] memory.lock busy, skipping` 並 return 0。**這是預期行為**，避免兩個程序同時改 MEMORY.md。
+
+**處理**：等 synthesize 跑完（通常 5-10 分鐘），audit 下次觸發會自動進去。如果 lock 卡死超過 10 分鐘：
+```bash
+ls -la data/memory.lock     # 看 mtime
+# 若 mtime 超過 10 分鐘，FileLock 會自動視為 stale 強制接管，無需手動清
+```
+
+### v1 state.json 自動 migrate
+
+第一次跑新版 evolve / synthesize，舊 state.json 會自動轉成 v2 schema、寫一份 `data/state.json.pre_v2_backup` 安全網。後續 read 不會再 migrate（已是 v2）。
+
+如果想強制重新 migrate：刪掉 v2 state，改名 `.pre_v2_backup` 回原檔名，重跑。
+
 ---
 
 ## 注意事項（Claude 閱讀）

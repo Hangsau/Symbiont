@@ -549,3 +549,48 @@ Python 程式碼完全共用，差異只在部署腳本：
 | L1 | 結構假設 | 中 | Symbiont 必須在 `{workdir}/projects/Symbiont/` 以外的安裝位置需手動設 config |
 | L2 | wrap skill 配合 | 低 | `--skip-if-wrap-done` 依賴 wrap skill 寫 `~/.claude/.wrap_done.txt`；不配合時旗標永遠不觸發 |
 | L3 | 既有 evolution_log | 低 | 已有歷史記錄的用戶需在 config.yaml 設覆蓋路徑，否則從新位置重開 |
+| L4 | `synth_state.json` 並發 | 低 | by design：synthesize 視為 single-writer。evolve+synthesize 真並發時計數器可能漏 1，實務罕見。詳見 `docs/MEMORY_LOCK_PROTOCOL.md` §9 |
+| L5 | backup 與 audit 並發讀 | 極低 | `evolve._run_backup` 跑 robocopy/rsync 期間若 audit 在歸檔，副本可能少一兩個檔，下次 backup 修正 |
+
+---
+
+## 九、Reliability Hardening Pass（2026-04-30）
+
+M1–M8 完成、實際運行一段時間後做了一次完整可靠性審查，從中找出 11 個結構性問題並逐一修補。詳細報告與計畫：
+
+- `docs/CODE_REVIEW_FINDINGS.md` — 11 條 finding 的詳細分析
+- `docs/IMPROVEMENT_PLAN.md` — 19 task 的執行計畫與進度（19/19 完成）
+- `docs/MEMORY_LOCK_PROTOCOL.md` — memory.lock 共用協議與鎖序
+- `docs/STATE_SCHEMA_V2.md` — state.json / synth_state.json v2 schema 與 migration
+
+### 修補的可靠性問題
+
+| # | 問題 | 修補 |
+|---|------|------|
+| R1 | babysit 自製 lock 是 check-then-write，並發有 race | 改用 `FileLock`（O_CREAT \| O_EXCL） |
+| R2 | synthesize cursor 推到 `now`，backlog 超過 limit 永久跳過舊 session | v2 schema：cursor 取本批最新 mtime，不推到 now |
+| R3 | evolve fallback 只看最新 session，中間漏處理項目永遠被跳 | v2 schema：`processed_recent[50]` set + 找最舊未處理 |
+| R4 | memory_audit 與 synthesize 同時改 MEMORY.md 無共用 lock | 新 `data/memory.lock`，audit 整段包鎖、synthesize memories/distill/prune 階段包鎖 |
+| R5 | synthesize 多階段寫入無原子性，中途失敗留半完成狀態 | staged commit：每階段成功後寫 `<stage>_done_at`，失敗 resume 不重跑 |
+| R6 | LLM 輸出 schema 驗證寬鬆，filename / topic 沒檢查 | `_is_safe_filename` / `_is_safe_topic` / `_has_required_frontmatter`，惡意輸出整個 run 不寫檔 |
+| R7 | SSHTransport 直接拼 shell command，remote path 可能注入 | `_quote_remote_path` 用 `shlex.quote`、保留 `~/` 語意 |
+| R8 | `agents.yaml` 路徑無 schema 檢查 | babysit 啟動時驗證控制字元 / path regex，可疑值 skip + log error |
+| R9 | LocalTransport 路徑契約 inconsistent，local agent 模式不可用 | `read_file` 相對路徑解析回 `self.inbox / path.name` |
+| R10 | 文件描述比測試覆蓋更完整 | 補 6 個 integration test 檔（pytest 70 → 102 條） |
+| R11 | `primary_project` auto-detect 對 daemon 風險 | auto-detect 觸發時 stderr warning + daemon 啟動印實際路徑 |
+
+### 對外行為改變（誠實審視）
+
+模組數、trigger 機制、LLM provider、教學機制、memory tier、subscription billing 全部不變。對外介面（用戶怎麼啟用 / 怎麼設 config）完全不變。唯一行為層面的改變：
+
+1. **synthesize 失敗 resume**：原本「失敗整輪重跑」變成「失敗從失敗階段續跑」。`current_run_id` 不為 null 表示有進行中 run，下次會 resume 而非重新挑 sessions。手動清掉該欄位（或刪 `synth_state.json`）回到原本行為。
+2. **memory_audit / synthesize 互斥**：`memory.lock` busy 時 audit 會 skip return 0（log busy 訊息）、synthesize 會直接 return 1。原本可能撞 MEMORY.md 的場景現在被擋住。
+3. **state.json schema v2**：欄位增加，舊 schema 第一次跑時自動 migrate，寫一份 `.pre_v2_backup` 安全網。
+
+這些都是「修復原本就該有的行為」（race / loss / atomic / validation），不是新增功能。沒有變成不是原本要的東西。
+
+### 事件紀錄：git reset 災難救援
+
+修補過程中段，spawn 給 Haiku 的 task（M4-A）prompt 沒禁止 git 操作。Haiku 跑了 `git pull --rebase + git reset` 把所有先前未 commit 的 src/ 修改吃掉。靠 codex CLI 的 session rollout（保存了所有 apply_patch 操作）寫了 `recovery/apply_patch.py` 還原 22/23 patches，剩餘手動補做。
+
+教訓：派 spawn agent 的 prompt 必須明確禁止 `git reset/pull/checkout/restore/stash drop/rebase`。`recovery/` 目錄保留搶救工具（OpenAI Apply Patch 解析器與套用器）供未來類似事件用。
