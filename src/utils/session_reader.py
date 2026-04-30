@@ -108,6 +108,33 @@ def find_session_by_uuid(sessions_dir: Path, uuid: str) -> Path | None:
     return matches[0] if matches else None
 
 
+def find_sessions_after(
+    sessions_dir: Path,
+    after_mtime: float,
+    after_uuid: str | None,
+    excluded_uuids: set[str] | None,
+    limit: int,
+) -> list[Path]:
+    """回傳 cursor 之後的 sessions，依 mtime/uuid 升序，取最舊 limit 個。"""
+    excluded = excluded_uuids or set()
+    candidates = []
+    for p in sessions_dir.rglob("*.jsonl"):
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        uuid = p.stem
+        if uuid in excluded:
+            continue
+        if mtime > after_mtime:
+            candidates.append(p)
+        elif mtime == after_mtime and after_uuid is not None and uuid > after_uuid:
+            candidates.append(p)
+
+    candidates.sort(key=lambda p: (p.stat().st_mtime, p.stem))
+    return candidates[:limit]
+
+
 def find_sessions_since(sessions_dir: Path, after_ts: float, limit: int) -> list[Path]:
     """回傳 mtime > after_ts 的 session 檔案，依 mtime 升序，取最舊到最新的 limit 個。
 

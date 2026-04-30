@@ -16,6 +16,7 @@ babysit.py — 自動化 Claude↔Agent 協作層
 
 import argparse
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -25,9 +26,9 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.utils.config_loader import load_config, get_int
+from src.utils.config_loader import load_config, get_path, get_int
 from src.utils.claude_runner import run_claude, check_auth
-from src.utils.file_ops import safe_read, safe_write, append_log, rotate_log
+from src.utils.file_ops import safe_read, safe_write, append_log, rotate_log, FileLock
 from src.utils.transport import make_transport
 
 # ── 常數 ──────────────────────────────────────────────────────────
@@ -43,6 +44,36 @@ DEAD_LETTER_MAX_RETRIES = 5      # dead letter 超過此次數後放棄
 
 NO_REPLY = "NO_REPLY_NEEDED"
 NEEDS_HUMAN = "NEEDS_HUMAN_REVIEW"
+
+
+def _validate_agents_cfg(agents: dict) -> list[str]:
+    """回傳錯誤訊息列表；空列表表示通過。"""
+    errors = []
+    if not isinstance(agents, dict):
+        return ["agents: 必須是 mapping"]
+
+    path_re = re.compile(r"^[A-Za-z0-9~_./\-]+/?$")
+    for name, agent_cfg in agents.items():
+        if not isinstance(agent_cfg, dict):
+            errors.append(f"{name}: 必須是 mapping")
+            continue
+
+        transport_type = agent_cfg.get("type", "remote_ssh")
+        path_keys = (
+            ("inbox_remote", "outbox_remote", "dialogues_remote")
+            if transport_type == "remote_ssh" else
+            ("inbox_dir", "outbox_dir")
+        )
+        for key in path_keys:
+            value = agent_cfg.get(key, "")
+            if not isinstance(value, str):
+                errors.append(f"{name}.{key}: 必須是字串")
+                continue
+            if "\n" in value or "\r" in value or any(ord(c) < 32 for c in value):
+                errors.append(f"{name}.{key}: 含控制字元")
+            if value != "" and not path_re.match(value):
+                errors.append(f"{name}.{key}: 含可疑字元 ({value!r})")
+    return errors
 
 
 # ── Sentinel 解析 ─────────────────────────────────────────────────
@@ -137,24 +168,15 @@ class TeachingState:
         return d
 
 
-# ── Lock 管理 ──────────────────────────────────────────────────────
+# ── Lock 相容包裝 ──────────────────────────────────────────────────
 
 def _acquire_lock(base_dir: Path, lock_max_age: int = LOCK_MAX_AGE_SECONDS) -> bool:
-    lock = base_dir / LOCK_FILE
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    if lock.exists():
-        age = time.time() - lock.stat().st_mtime
-        if age < lock_max_age:
-            return False
-        append_log(base_dir / ERROR_LOG,
-                   f"[babysit] lock 超過 {lock_max_age}s，強制刪除（上次可能崩潰）")
-        lock.unlink(missing_ok=True)
-    lock.write_text(str(datetime.now(timezone.utc).isoformat()))
-    return True
+    return FileLock(base_dir / LOCK_FILE, timeout=1,
+                    stale_timeout=lock_max_age).acquire()
 
 
 def _release_lock(base_dir: Path) -> None:
-    (base_dir / LOCK_FILE).unlink(missing_ok=True)
+    FileLock(base_dir / LOCK_FILE).release()
 
 
 # ── Dead Letter Queue ─────────────────────────────────────────────
@@ -499,6 +521,39 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
 DAEMON_INTERVAL_SECONDS = 120
 
 
+def _do_babysit_work(enabled_agents: dict, cfg: dict, dry_run: bool,
+                     base_dir: Path, error_log: Path,
+                     teaching_timeout: int) -> None:
+    all_state = _load_json_state(base_dir / STATE_FILE, {})
+
+    for agent_name, agent_cfg in enabled_agents.items():
+        print(f"\n[babysit] 處理 agent: {agent_name}")
+        try:
+            transport = make_transport(agent_cfg)
+        except ValueError as e:
+            append_log(error_log, f"[{agent_name}] transport 建立失敗: {e}")
+            continue
+
+        if not transport.ping():
+            append_log(error_log, f"[{agent_name}] 無法連線，跳過")
+            print(f"[{agent_name}] ❌ 連線失敗，跳過")
+            continue
+
+        _flush_dead_letters(base_dir, agent_name, transport, error_log, dry_run)
+
+        all_state = _process_inbox(
+            agent_name, agent_cfg, transport,
+            all_state, cfg, dry_run, base_dir,
+        )
+        _process_teaching_loop(
+            agent_name, agent_cfg, transport,
+            cfg, dry_run, base_dir,
+            teaching_timeout=teaching_timeout,
+        )
+
+    _save_json_state(base_dir / STATE_FILE, all_state, dry_run, label="babysit state")
+
+
 def _run_once(dry_run: bool, base_dir: Path, cfg: dict,
               error_log: Path, lock_max_age: int, teaching_timeout: int) -> None:
     """一次完整執行（可被 daemon loop 或 Task Scheduler 直接呼叫）"""
@@ -518,50 +573,33 @@ def _run_once(dry_run: bool, base_dir: Path, cfg: dict,
         append_log(error_log, f"[babysit] 無法解析 agents.yaml: {e}")
         return
 
-    agents = agents_cfg.get("agents", {})
+    agents = agents_cfg.get("agents", {}) if isinstance(agents_cfg, dict) else {}
+    errors = _validate_agents_cfg(agents)
+    if errors:
+        for e in errors:
+            append_log(error_log, f"[babysit] agents.yaml schema error: {e}")
+        print(f"[babysit] agents.yaml 有 {len(errors)} 條 schema 錯誤，跳過")
+        return
+
     enabled_agents = {k: v for k, v in agents.items() if v.get("enabled", False)}
 
     if not enabled_agents:
         print("[babysit] 沒有啟用的 agent，結束")
         return
 
-    if not dry_run and not _acquire_lock(base_dir, lock_max_age):
-        print("[babysit] 上一次執行仍在進行，跳過")
+    if dry_run:
+        _do_babysit_work(enabled_agents, cfg, dry_run, base_dir, error_log,
+                         teaching_timeout)
+        print("\n[babysit] 完成")
         return
 
     try:
-        all_state = _load_json_state(base_dir / STATE_FILE, {})
-
-        for agent_name, agent_cfg in enabled_agents.items():
-            print(f"\n[babysit] 處理 agent: {agent_name}")
-            try:
-                transport = make_transport(agent_cfg)
-            except ValueError as e:
-                append_log(error_log, f"[{agent_name}] transport 建立失敗: {e}")
-                continue
-
-            if not transport.ping():
-                append_log(error_log, f"[{agent_name}] 無法連線，跳過")
-                print(f"[{agent_name}] ❌ 連線失敗，跳過")
-                continue
-
-            _flush_dead_letters(base_dir, agent_name, transport, error_log, dry_run)
-
-            all_state = _process_inbox(
-                agent_name, agent_cfg, transport,
-                all_state, cfg, dry_run, base_dir,
-            )
-            _process_teaching_loop(
-                agent_name, agent_cfg, transport,
-                cfg, dry_run, base_dir,
-                teaching_timeout=teaching_timeout,
-            )
-
-        _save_json_state(base_dir / STATE_FILE, all_state, dry_run, label="babysit state")
-
-    finally:
-        if not dry_run:
-            _release_lock(base_dir)
+        with FileLock(base_dir / LOCK_FILE, timeout=1,
+                      stale_timeout=lock_max_age):
+            _do_babysit_work(enabled_agents, cfg, dry_run, base_dir, error_log,
+                             teaching_timeout)
+    except TimeoutError:
+        print("[babysit] 上一次執行仍在進行，跳過")
 
     print("\n[babysit] 完成")
 
@@ -577,6 +615,7 @@ def main():
 
     base_dir = Path(__file__).parent.parent
     cfg = load_config()
+    print(f"[babysit] primary_project_dir = {get_path(cfg, 'primary_project_dir')}")
     error_log = base_dir / ERROR_LOG
 
     rotate_log(error_log, max_lines=2000)

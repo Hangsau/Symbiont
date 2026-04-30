@@ -413,6 +413,35 @@ Typical impact on a Claude subscription: negligible for `evolve.py` alone (2–3
 
 ---
 
+## Reliability & Test Coverage
+
+Symbiont went through a focused reliability hardening pass on 2026-04-30 (see `docs/IMPROVEMENT_PLAN.md` and `docs/CODE_REVIEW_FINDINGS.md` for the audit and the resulting 18-task plan).
+
+**Concurrency**
+- All daemons use atomic `FileLock` (`O_CREAT | O_EXCL`); no more check-then-write races on babysit lock or memory index.
+- A shared `data/memory.lock` synchronises `memory_audit.py` and `synthesize.py` writes to `MEMORY.md`, `memory/`, and `knowledge/`. Lock order is documented in `docs/MEMORY_LOCK_PROTOCOL.md`.
+
+**State integrity**
+- `evolve.py` and `synthesize.py` use a v2 cursor schema (`processed_recent[50]`, `last_synth_session_mtime`) so backlogs are processed without loss or duplication. Schema and migration rules in `docs/STATE_SCHEMA_V2.md`.
+- `synthesize.py` does staged commit per phase (patterns / memories / distill / prune / log); a crash mid-run resumes from the failed phase without re-invoking the LLM.
+
+**Input validation**
+- `claude -p` outputs are validated against safe filename / topic / required-frontmatter rules. Malformed JSON or dangerous filenames write nothing — only `error.log`.
+- `agents.yaml` paths are checked against control characters and shell-injection patterns; suspicious values cause babysit to skip with an error log.
+
+**SSH safety**
+- All remote paths are `shlex.quote`-wrapped (preserving `~/` semantics) so no shell injection through agent config.
+
+**Test coverage**: 102 tests passing (up from 70). New integration tests cover local transport round-trip, SSH quoting, synthesize state cursor (backlog 25 → no loss), evolve fallback, FileLock concurrency (two-thread races), and staged commit resume.
+
+**Still requiring long-running deployment for full validation**:
+- Cross-session synthesis quality (skill generation accuracy, deduplication effectiveness over months)
+- Dead letter queue retry behaviour under prolonged transport outages
+- Memory distillation tier transitions over multi-month timescales
+- `synth_state.json` concurrent writes are by-design single-writer (see `MEMORY_LOCK_PROTOCOL.md` §9); evolve+synthesize true-parallel race is theoretically possible but practically rare.
+
+---
+
 ## Known Limitations
 
 - **Requires the machine to be on** — scheduling runs locally. For 24/7 coverage, deploy Symbiont on an always-on machine or VM.

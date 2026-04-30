@@ -5,6 +5,8 @@ knowledge_writer.py — 知識庫寫入與索引維護
   write_knowledge_entry(topic, content, knowledge_dir, mem_type) -> Path
   update_knowledge_tags(knowledge_dir, tags_path) -> None
   move_to_distilled(memory_path, distilled_dir) -> None
+
+本模組函式假設呼叫者已持有 data/memory.lock，模組內部不取鎖。
 """
 
 import re

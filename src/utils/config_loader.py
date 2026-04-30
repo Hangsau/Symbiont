@@ -20,6 +20,7 @@ config_loader.py — 載入 config.yaml 並解析所有路徑
 
 import os
 import re
+import sys
 from pathlib import Path
 
 import yaml
@@ -92,6 +93,8 @@ def _autodetect_primary_project_dir(base: Path) -> Path:
             f"{base}. "
             "Set LOCAL_AGENT_PRIMARY_PROJECT env var or config.yaml primary_project."
         )
+    print(f"[config_loader] WARNING: primary_project not set, "
+          f"auto-detected: {best_dir.name}", file=sys.stderr)
     return best_dir
 
 

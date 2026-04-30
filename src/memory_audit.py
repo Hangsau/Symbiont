@@ -17,6 +17,7 @@ memory_audit.py — 自動維護 Claude Code memory 系統
 """
 
 import argparse
+from contextlib import nullcontext
 import re
 import sys
 from datetime import date, datetime, timezone
@@ -94,9 +95,7 @@ def _remove_from_memory_index(index_path: Path, filename: str, dry_run: bool) ->
         print(f"  [dry-run] 從 MEMORY.md 移除：{filename}")
         return True
 
-    lock_path = index_path.with_suffix(".lock")
-    with FileLock(lock_path, timeout=30):
-        safe_write(index_path, "".join(new_lines))
+    safe_write(index_path, "".join(new_lines))
     return True
 
 
@@ -210,6 +209,7 @@ def _extract_first_line(content: str) -> str:
 def run(dry_run: bool = False) -> int:
     """主流程。回傳 exit code（0=成功，1=失敗/跳過）。"""
     cfg = load_config()
+    print(f"[memory_audit] primary_project_dir = {get_path(cfg, 'primary_project_dir')}")
 
     audit_cfg = cfg.get("memory_audit", {})
     enabled = audit_cfg.get("enabled", False)
@@ -237,94 +237,109 @@ def run(dry_run: bool = False) -> int:
     archive_dir = memory_dir / "archive"
     thoughts_dir = memory_dir / "thoughts"
     audit_log = get_path(cfg, "audit_log")
+    memory_lock_path = Path(cfg["_root"]) / "data" / "memory.lock"
     today = date.today()
     today_str = today.isoformat()
 
+    lock = nullcontext() if dry_run else FileLock(
+        memory_lock_path, timeout=30, stale_timeout=600
+    )
+    try:
+        lock.__enter__()
+    except TimeoutError:
+        msg = "[memory_audit] memory.lock busy, skipping"
+        append_log(audit_log, msg)
+        print(msg)
+        return 0
+
     # archive_dir 統一在此建立，_archive_file 不需重複 mkdir
-    if auto_archive and not dry_run:
-        archive_dir.mkdir(exist_ok=True)
+    try:
+        if auto_archive and not dry_run:
+            archive_dir.mkdir(exist_ok=True)
 
-    print(f"[memory_audit] 開始審計（{today_str}）{'[dry-run]' if dry_run else ''}")
+        print(f"[memory_audit] 開始審計（{today_str}）{'[dry-run]' if dry_run else ''}")
 
-    archived_count = 0
-    overdue_items = []
-    thoughts_archived = 0
+        archived_count = 0
+        overdue_items = []
+        thoughts_archived = 0
 
-    # ── 1. 掃描 memory/*.md ───────────────────────────────────────
-    for md_path in sorted(memory_dir.glob("*.md")):
-        if md_path.name in NON_MEMORY_FILES:
-            continue
-
-        try:
-            content = safe_read(md_path)
-            if not content:
+        # ── 1. 掃描 memory/*.md ───────────────────────────────────────
+        for md_path in sorted(memory_dir.glob("*.md")):
+            if md_path.name in NON_MEMORY_FILES:
                 continue
 
-            fm = _parse_frontmatter(content)
+            try:
+                content = safe_read(md_path)
+                if not content:
+                    continue
 
-            valid_until = _parse_date(fm.get("valid_until", ""))
-            if valid_until is not None and valid_until <= today:
-                if auto_archive:
-                    if _archive_file(md_path, archive_dir, index_path, today_str, dry_run):
-                        archived_count += 1
-                else:
-                    print(f"  [報告] valid_until 已設定（auto_archive=false，略過）：{md_path.name}")
+                fm = _parse_frontmatter(content)
 
-            review_by = _parse_date(fm.get("review_by", ""))
-            if review_by is not None and review_by <= today:
-                overdue_items.append((md_path.name, review_by.isoformat()))
+                valid_until = _parse_date(fm.get("valid_until", ""))
+                if valid_until is not None and valid_until <= today:
+                    if auto_archive:
+                        if _archive_file(md_path, archive_dir, index_path, today_str, dry_run):
+                            archived_count += 1
+                    else:
+                        print(f"  [報告] valid_until 已設定（auto_archive=false，略過）：{md_path.name}")
 
-        except Exception as e:
-            print(f"  [warn] 處理 {md_path.name} 時發生錯誤，略過：{e}", file=sys.stderr)
+                review_by = _parse_date(fm.get("review_by", ""))
+                if review_by is not None and review_by <= today:
+                    overdue_items.append((md_path.name, review_by.isoformat()))
 
-    # ── 2. thoughts/ 溢出歸檔 ────────────────────────────────────
-    if thoughts_dir.exists():
-        if auto_archive:
-            thoughts_archived = _archive_oldest_thoughts(
-                thoughts_dir, archive_dir, threshold, dry_run
-            )
+            except Exception as e:
+                print(f"  [warn] 處理 {md_path.name} 時發生錯誤，略過：{e}", file=sys.stderr)
+
+        # ── 2. thoughts/ 溢出歸檔 ────────────────────────────────────
+        if thoughts_dir.exists():
+            if auto_archive:
+                thoughts_archived = _archive_oldest_thoughts(
+                    thoughts_dir, archive_dir, threshold, dry_run
+                )
+            else:
+                count = len(list(thoughts_dir.glob("*.md")))
+                if count > threshold:
+                    print(f"  [報告] thoughts/ 有 {count} 個，超過閾值 {threshold}"
+                          f"（auto_archive=false，略過）")
+
+        # ── 3. MEMORY.md 容量檢查 ────────────────────────────────────
+        index_content = safe_read(index_path)
+        memory_lines = len(index_content.splitlines()) if index_content else 0
+
+        # ── 4. 輸出摘要 ──────────────────────────────────────────────
+        now_str = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        nothing_to_do = not archived_count and not thoughts_archived and not overdue_items
+
+        lines = [f"\n[{now_str}] memory_audit 執行摘要{'（dry-run）' if dry_run else ''}"]
+
+        if archived_count:
+            lines.append(f"  ✓ valid_until 歸檔：{archived_count} 個移至 archive/")
+        if thoughts_archived:
+            lines.append(f"  ✓ thoughts/ 歸檔：{thoughts_archived} 個移至 archive/{THOUGHTS_ARCHIVE_FILE}")
+        if overdue_items:
+            lines.append("  ⚠ review_by 到期（需人工確認）：")
+            for name, d in overdue_items:
+                lines.append(f"      - {name}（到期 {d}）")
+
+        if memory_lines > warn_lines:
+            lines.append(f"  ⚠ MEMORY.md：{memory_lines}/{MEMORY_INDEX_MAX_LINES} 行，"
+                         f"超過警告閾值 {warn_lines}")
+        elif nothing_to_do:
+            lines.append(f"  ✓ 無需處理（MEMORY.md：{memory_lines}/{MEMORY_INDEX_MAX_LINES} 行）")
         else:
-            count = len(list(thoughts_dir.glob("*.md")))
-            if count > threshold:
-                print(f"  [報告] thoughts/ 有 {count} 個，超過閾值 {threshold}"
-                      f"（auto_archive=false，略過）")
+            lines.append(f"  ℹ MEMORY.md：{memory_lines}/{MEMORY_INDEX_MAX_LINES} 行（正常）")
 
-    # ── 3. MEMORY.md 容量檢查 ────────────────────────────────────
-    index_content = safe_read(index_path)
-    memory_lines = len(index_content.splitlines()) if index_content else 0
+        summary = "\n".join(lines)
+        print(summary)
 
-    # ── 4. 輸出摘要 ──────────────────────────────────────────────
-    now_str = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    nothing_to_do = not archived_count and not thoughts_archived and not overdue_items
+        if not dry_run:
+            append_log(audit_log, summary)
+            get_path(cfg, "pending_audit").unlink(missing_ok=True)
 
-    lines = [f"\n[{now_str}] memory_audit 執行摘要{'（dry-run）' if dry_run else ''}"]
-
-    if archived_count:
-        lines.append(f"  ✓ valid_until 歸檔：{archived_count} 個移至 archive/")
-    if thoughts_archived:
-        lines.append(f"  ✓ thoughts/ 歸檔：{thoughts_archived} 個移至 archive/{THOUGHTS_ARCHIVE_FILE}")
-    if overdue_items:
-        lines.append("  ⚠ review_by 到期（需人工確認）：")
-        for name, d in overdue_items:
-            lines.append(f"      - {name}（到期 {d}）")
-
-    if memory_lines > warn_lines:
-        lines.append(f"  ⚠ MEMORY.md：{memory_lines}/{MEMORY_INDEX_MAX_LINES} 行，"
-                     f"超過警告閾值 {warn_lines}")
-    elif nothing_to_do:
-        lines.append(f"  ✓ 無需處理（MEMORY.md：{memory_lines}/{MEMORY_INDEX_MAX_LINES} 行）")
-    else:
-        lines.append(f"  ℹ MEMORY.md：{memory_lines}/{MEMORY_INDEX_MAX_LINES} 行（正常）")
-
-    summary = "\n".join(lines)
-    print(summary)
-
-    if not dry_run:
-        append_log(audit_log, summary)
-        get_path(cfg, "pending_audit").unlink(missing_ok=True)
-
-    print("[memory_audit] done")
-    return 0
+        print("[memory_audit] done")
+        return 0
+    finally:
+        lock.__exit__(None, None, None)
 
 
 # ── CLI 入口 ──────────────────────────────────────────────────────

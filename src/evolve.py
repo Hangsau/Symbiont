@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.config_loader import load_config, get_path, get_int, get_str
-from src.utils.session_reader import parse_session, find_latest_session, find_session_by_uuid
+from src.utils.session_reader import parse_session, find_session_by_uuid, find_sessions_after
 from src.utils.claude_runner import run_claude, check_auth
 from src.utils.file_ops import safe_read, safe_write, append_log, FileLock, rotate_log
 
@@ -33,23 +33,106 @@ MAX_EVOLUTION_LOG_TOPICS = 30
 MAX_TURN_CHARS = 800        # 單條對話截斷長度（避免單條 turn 佔滿 prompt）
 MAX_CLAUDE_MD_CHARS = 3000  # CLAUDE.md 傳入 prompt 的最大字數
 MAX_DISTILL_CONTEXT_CHARS = 3000  # 蒸餾 prompt 裡 claude_md_rest 的截斷上限
+PROCESSED_RECENT_LIMIT = 50
+
+_SAFE_FILENAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,80}\.md$")
+_SAFE_TOPIC_RE = re.compile(r"^[a-z][a-z0-9-]{0,60}$")
+
+
+# ── validation helpers ────────────────────────────────────────────
+
+def _is_safe_filename(s: str) -> bool:
+    return isinstance(s, str) and bool(_SAFE_FILENAME_RE.match(s))
+
+
+def _is_safe_topic(s: str) -> bool:
+    return isinstance(s, str) and bool(_SAFE_TOPIC_RE.match(s))
+
+
+def _has_required_frontmatter(content: str, required: tuple[str, ...]) -> bool:
+    if not isinstance(content, str):
+        return False
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+    if not m:
+        return False
+    fm = m.group(1)
+    return all(re.search(rf"^{k}:\s*\S", fm, re.MULTILINE) for k in required)
 
 
 # ── state.json 操作 ───────────────────────────────────────────────
 
-def _read_state(state_path: Path) -> dict:
+def _default_state_v2() -> dict:
+    return {
+        "last_processed_mtime": 0.0,
+        "last_processed_uuid": None,
+        "processed_recent": [],
+        "processed_at": None,
+    }
+
+
+def _backup_legacy_state(state_path: Path, raw: str) -> None:
+    backup_path = state_path.with_name(state_path.name + ".pre_v2_backup")
+    if backup_path.exists():
+        return
+    try:
+        backup_path.write_text(raw, encoding="utf-8")
+    except OSError as e:
+        print(f"[evolve] state backup failed (non-critical): {e}", file=sys.stderr)
+
+
+def _migrate_state_v1_to_v2(data: dict, state_path: Path,
+                            sessions_dir: Path | None) -> dict:
+    uuid = data.get("last_processed_uuid")
+    mtime = 0.0
+    if uuid and sessions_dir is not None:
+        session_path = find_session_by_uuid(sessions_dir, uuid)
+        if session_path:
+            try:
+                mtime = session_path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+    migrated = {
+        "last_processed_mtime": mtime,
+        "last_processed_uuid": uuid,
+        "processed_recent": [uuid] if uuid else [],
+        "processed_at": data.get("processed_at"),
+    }
+    safe_write(state_path, json.dumps(migrated, indent=2, ensure_ascii=False))
+    return migrated
+
+
+def _read_state(state_path: Path, sessions_dir: Path | None = None) -> dict:
     raw = safe_read(state_path)
     if raw:
         try:
-            return json.loads(raw)
+            data = json.loads(raw)
         except json.JSONDecodeError:
-            pass
-    return {"last_processed_uuid": None, "processed_at": None}
+            return _default_state_v2()
+        if "last_processed_mtime" not in data or "processed_recent" not in data:
+            _backup_legacy_state(state_path, raw)
+            return _migrate_state_v1_to_v2(data, state_path, sessions_dir)
+        state = _default_state_v2()
+        state.update(data)
+        if not isinstance(state.get("processed_recent"), list):
+            state["processed_recent"] = []
+        return state
+    return _default_state_v2()
 
 
-def _write_state(state_path: Path, uuid: str, dry_run: bool) -> None:
+def _write_state(state_path: Path, uuid: str, jsonl_path: Path, dry_run: bool) -> None:
+    current = _read_state(state_path)
+    recent = current.get("processed_recent", [])
+    if uuid not in recent:
+        recent.append(uuid)
+    recent = recent[-PROCESSED_RECENT_LIMIT:]
+    try:
+        mtime = jsonl_path.stat().st_mtime
+    except OSError:
+        mtime = current.get("last_processed_mtime", 0.0)
     state = {
+        "last_processed_mtime": mtime,
         "last_processed_uuid": uuid,
+        "processed_recent": recent,
         "processed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     if dry_run:
@@ -77,21 +160,23 @@ def _find_target_session(cfg: dict) -> tuple[Path | None, str | None]:
             print(f"[evolve] pending uuid not found: {uuid}", file=sys.stderr)
             pending_path.unlink(missing_ok=True)  # 無效 uuid → 清掉，繼續找最新
 
-    # fallback：找比 last_processed_uuid 更新的 session
-    state = _read_state(state_path)
-    last_uuid = state.get("last_processed_uuid")
-
-    latest = find_latest_session(sessions_dir)
-    if latest is None:
-        return None, None
-
-    latest_uuid = latest.stem
-    if latest_uuid == last_uuid:
+    # fallback：找 cursor 之後最舊、且近期未處理過的 session
+    state = _read_state(state_path, sessions_dir)
+    candidates = find_sessions_after(
+        sessions_dir,
+        after_mtime=float(state.get("last_processed_mtime", 0.0) or 0.0),
+        after_uuid=state.get("last_processed_uuid"),
+        excluded_uuids=set(state.get("processed_recent", [])),
+        limit=1,
+    )
+    if not candidates:
         print("[evolve] 無新 session 需要處理")
         return None, None
 
-    print(f"[evolve] new session: {latest_uuid}")
-    return latest, latest_uuid
+    target = candidates[0]
+    uuid = target.stem
+    print(f"[evolve] new session: {uuid}")
+    return target, uuid
 
 
 # ── evolution_log 讀取（只取 canonical topics）──────────────────
@@ -223,6 +308,9 @@ def _validate_output(data: dict) -> bool:
         return False
     for rule in data["rules_to_add"]:
         if not isinstance(rule, dict) or "content" not in rule:
+            return False
+        content = rule["content"]
+        if not isinstance(content, str) or not content.strip() or not content.startswith("-"):
             return False
     return True
 
@@ -373,7 +461,7 @@ def _validate_distill_output(data: dict, existing_count: int, new_count: int) ->
     for rule in distilled:
         if not isinstance(rule, dict) or "content" not in rule:
             return False
-        if not rule["content"].startswith("- "):
+        if not isinstance(rule["content"], str) or not rule["content"].startswith("- "):
             return False
     return True
 
@@ -534,6 +622,7 @@ def _run_backup(cfg: dict) -> None:
 def run(dry_run: bool = False, skip_if_wrap_done: bool = False) -> int:
     """主流程。回傳 exit code（0=成功，1=失敗/無需處理）。"""
     cfg = load_config()
+    print(f"[evolve] primary_project_dir = {get_path(cfg, 'primary_project_dir')}")
     error_log = get_path(cfg, "error_log")
     rotate_log(error_log, max_lines=2000)
     state_path = get_path(cfg, "state_file")
@@ -567,7 +656,7 @@ def run(dry_run: bool = False, skip_if_wrap_done: bool = False) -> int:
     turns = parse_session(jsonl_path, max_turns=max_turns)
     if not turns:
         print(f"[evolve] session 無可解析對話：{uuid}")
-        _write_state(state_path, uuid, dry_run)
+        _write_state(state_path, uuid, jsonl_path, dry_run)
         return 0
 
     print(f"[evolve] parsed {len(turns)} turns from {uuid}")
@@ -683,7 +772,7 @@ def run(dry_run: bool = False, skip_if_wrap_done: bool = False) -> int:
                           distill_before_count=distill_before_count)
 
     # ── 更新 state.json ───────────────────────────────────────────
-    _write_state(state_path, uuid, dry_run)
+    _write_state(state_path, uuid, jsonl_path, dry_run)
 
     # ── 清除 pending_evolve.txt ───────────────────────────────────
     if pending_path.exists():

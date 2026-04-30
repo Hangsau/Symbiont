@@ -5,12 +5,19 @@ transport.py — Agent 通訊傳輸層抽象
   - SSHTransport：遠端 VM（SSH + SCP）
   - LocalTransport：同機目錄（file I/O）
 
+契約：
+  - list_inbox 回傳的是該 transport 自己 read_file 能直接接收的 token，
+    呼叫端不應假設它一定是檔名或絕對路徑。
+  - SSHTransport 由呼叫端拼接 {inbox_remote}{filename}。
+  - LocalTransport 會將相對路徑解析為 self.inbox / Path(path_str).name。
+
 使用：
   from src.utils.transport import make_transport
   transport = make_transport(agent_cfg)
 """
 
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -29,6 +36,12 @@ DIALOGUES_FETCH_COUNT = 10       # list_dialogues 取最新幾筆
 
 
 # ── Transport 類別 ────────────────────────────────────────────────
+
+def _quote_remote_path(p: str) -> str:
+    if p.startswith("~/"):
+        return "~/" + shlex.quote(p[2:])
+    return shlex.quote(p)
+
 
 class SSHTransport:
     """遠端 SSH agent transport。"""
@@ -72,26 +85,22 @@ class SSHTransport:
         return ok
 
     def list_inbox(self, inbox_remote: str) -> list[str]:
-        ok, out = self._ssh(f"ls {inbox_remote} 2>/dev/null")
+        q = _quote_remote_path(inbox_remote)
+        ok, out = self._ssh(f"ls {q} 2>/dev/null")
         if not ok or not out:
             return []
         return [f for f in out.splitlines() if f.strip()]
 
     def read_file(self, remote_path: str) -> str | None:
-        # 只 quote 檔名部分，讓目錄的 ~ 正常展開
-        if '/' in remote_path:
-            dir_part, file_part = remote_path.rsplit('/', 1)
-            file_escaped = file_part.replace("'", "'\\''")
-            cmd = f"cat {dir_part}/'{file_escaped}'"
-        else:
-            cmd = f"cat '{remote_path.replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'"
-        ok, out = self._ssh(cmd)
+        q = _quote_remote_path(remote_path)
+        ok, out = self._ssh(f"cat {q}")
         if not ok:
             return None
         return out if out else None
 
     def send_reply(self, content: str, outbox_remote: str, filename: str,
                    max_retries: int = 3) -> bool:
+        """Send via scp. Keep outbox_remote free of shell-special characters."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
                                          delete=False, encoding="utf-8") as f:
             f.write(content)
@@ -107,8 +116,9 @@ class SSHTransport:
             os.unlink(tmp)
 
     def list_dialogues(self, dialogues_remote: str) -> list[str]:
+        q = _quote_remote_path(dialogues_remote)
         ok, out = self._ssh(
-            f"ls -t {dialogues_remote} 2>/dev/null | head -{DIALOGUES_FETCH_COUNT}"
+            f"ls -t {q} 2>/dev/null | head -{DIALOGUES_FETCH_COUNT}"
         )
         if not ok or not out:
             return []
@@ -134,13 +144,17 @@ class LocalTransport:
         return [f.name for f in sorted(self.inbox.iterdir(), key=lambda p: p.stat().st_mtime)]
 
     def read_file(self, path_str: str) -> str | None:
+        p = Path(path_str)
+        if not p.is_absolute():
+            p = self.inbox / p.name
         try:
-            content = Path(path_str).read_text(encoding="utf-8", errors="replace")
+            content = p.read_text(encoding="utf-8", errors="replace")
             return content if content else None
         except OSError:
             return None
 
     def send_reply(self, content: str, _outbox_remote: str, filename: str) -> bool:
+        """寫入 self.outbox / filename。outbox_remote 參數為 SSH 介面相容性保留，本地模式忽略。"""
         self.outbox.mkdir(parents=True, exist_ok=True)
         return safe_write(self.outbox / filename, content)
 

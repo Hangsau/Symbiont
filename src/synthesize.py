@@ -19,6 +19,7 @@ synthesize.py — 跨 session 自動進化模組
 """
 
 import argparse
+from contextlib import nullcontext
 import json
 import re
 import statistics
@@ -28,9 +29,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.modules.setdefault("synthesize", sys.modules[__name__])
 
 from src.utils.config_loader import load_config, get_path, get_int, get_str
-from src.utils.session_reader import parse_session, find_sessions_since
+from src.utils.session_reader import parse_session, find_session_by_uuid, find_sessions_after
 from src.utils.friction_extractor import extract_friction_fragments
 from src.utils.habit_extractor import extract_habit_fragments
 from src.utils.claude_runner import run_claude, check_auth
@@ -47,6 +49,28 @@ MAX_TURNS_PER_SESSION = 50
 _EXISTING_SKILL_MAX = 30       # 最多讀幾個現有 skill
 _EXISTING_SKILL_DESC_CHARS = 80  # 每條 description 截斷字數
 _QUALITY_SCORE_MIN = 2         # 低於此分數的 skill 不寫入
+
+_SAFE_FILENAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,80}\.md$")
+_SAFE_TOPIC_RE = re.compile(r"^[a-z][a-z0-9-]{0,60}$")
+
+
+def _is_safe_filename(s: str) -> bool:
+    return isinstance(s, str) and bool(_SAFE_FILENAME_RE.match(s))
+
+
+def _is_safe_topic(s: str) -> bool:
+    return isinstance(s, str) and bool(_SAFE_TOPIC_RE.match(s))
+
+
+def _has_required_frontmatter(content: str, required: tuple[str, ...]) -> bool:
+    if not isinstance(content, str):
+        return False
+    content = content.replace("\\n", "\n")
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+    if not m:
+        return False
+    fm = m.group(1)
+    return all(re.search(rf"^{k}:\s*\S", fm, re.MULTILINE) for k in required)
 
 
 # ── 現有 skill 描述載入 ───────────────────────────────────────────
@@ -74,19 +98,80 @@ def _load_existing_skill_descriptions(skills_dir: Path) -> str:
 
 # ── synth_state.json 操作 ─────────────────────────────────────────
 
-def _load_synth_state(state_path: Path) -> dict:
+def _default_synth_state_v2() -> dict:
+    return {
+        "sessions_since_last_synth": 0,
+        "last_synth_session_mtime": 0.0,
+        "last_synth_session_uuid": None,
+        "current_run_id": None,
+        "current_run_summary": "",
+        "current_run_memories": [],
+        "current_run_created_skills": [],
+        "current_run_deleted_skills": [],
+        "patterns_done_at": None,
+        "memories_done_at": None,
+        "distill_done_at": None,
+        "prune_done_at": None,
+        "log_done_at": None,
+        "current_run_sessions": [],
+        "skill_stats": {},
+        "distilled_mapping": {},
+    }
+
+
+def _backup_legacy_synth_state(state_path: Path, raw: str) -> None:
+    backup_path = state_path.with_name(state_path.name + ".pre_v2_backup")
+    if backup_path.exists():
+        return
+    try:
+        backup_path.write_text(raw, encoding="utf-8")
+    except OSError as e:
+        print(f"[synthesize] state backup failed (non-critical): {e}", file=sys.stderr)
+
+
+def _migrate_synth_state_v1_to_v2(data: dict, state_path: Path,
+                                  sessions_dir: Path | None) -> dict:
+    uuid = data.get("last_synth_uuid")
+    mtime = 0.0
+    if uuid and sessions_dir is not None:
+        session_path = find_session_by_uuid(sessions_dir, uuid)
+        if session_path:
+            try:
+                mtime = session_path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+    if not mtime and data.get("last_synth_at"):
+        try:
+            mtime = datetime.fromisoformat(data["last_synth_at"]).timestamp()
+        except (ValueError, TypeError):
+            mtime = 0.0
+
+    migrated = _default_synth_state_v2()
+    migrated.update({
+        "sessions_since_last_synth": data.get("sessions_since_last_synth", 0),
+        "last_synth_session_mtime": mtime,
+        "last_synth_session_uuid": uuid,
+        "skill_stats": data.get("skill_stats", {}),
+        "distilled_mapping": data.get("distilled_mapping", {}),
+    })
+    safe_write(state_path, json.dumps(migrated, indent=2, ensure_ascii=False))
+    return migrated
+
+
+def _load_synth_state(state_path: Path, sessions_dir: Path | None = None) -> dict:
     raw = safe_read(state_path)
     if raw:
         try:
-            return json.loads(raw)
+            data = json.loads(raw)
         except json.JSONDecodeError:
-            pass
-    return {
-        "sessions_since_last_synth": 0,
-        "last_synth_at": None,
-        "last_synth_uuid": None,
-        "skill_stats": {},
-    }
+            return _default_synth_state_v2()
+        if "last_synth_session_mtime" not in data or "last_synth_at" in data:
+            _backup_legacy_synth_state(state_path, raw)
+            return _migrate_synth_state_v1_to_v2(data, state_path, sessions_dir)
+        state = _default_synth_state_v2()
+        state.update(data)
+        return state
+    return _default_synth_state_v2()
 
 
 def _save_synth_state(state_path: Path, state: dict, dry_run: bool) -> None:
@@ -102,14 +187,21 @@ def _find_target_sessions(cfg: dict, state: dict) -> list[Path]:
     """回傳上次 synthesis 之後的 sessions，最多 sessions_per_cycle 個。"""
     sessions_dir = get_path(cfg, "sessions_dir")
     limit = get_int(cfg, SYNTH_STATE_KEY, "sessions_per_cycle", default=10)
-    after_ts = 0.0
-    if state.get("last_synth_at"):
-        try:
-            dt = datetime.fromisoformat(state["last_synth_at"])
-            after_ts = dt.timestamp()
-        except (ValueError, TypeError):
-            after_ts = 0.0
-    return find_sessions_since(sessions_dir, after_ts, limit)
+    if state.get("current_run_id") and state.get("current_run_sessions"):
+        sessions = []
+        for uuid in state.get("current_run_sessions", []):
+            p = find_session_by_uuid(sessions_dir, uuid)
+            if p:
+                sessions.append(p)
+        sessions.sort(key=lambda p: (p.stat().st_mtime, p.stem))
+        return sessions
+    return find_sessions_after(
+        sessions_dir,
+        after_mtime=float(state.get("last_synth_session_mtime", 0.0) or 0.0),
+        after_uuid=state.get("last_synth_session_uuid"),
+        excluded_uuids=None,
+        limit=limit,
+    )
 
 
 # ── skill 使用次數掃描 ────────────────────────────────────────────
@@ -267,7 +359,23 @@ def _parse_synthesis_output(raw: str) -> dict | None:
 
 def _validate_distill_output(data: dict) -> bool:
     """驗證 _call_distill_llm 的輸出：必須有 entries list。"""
-    return isinstance(data, dict) and isinstance(data.get("entries"), list)
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+        return False
+    for entry in data["entries"]:
+        if not isinstance(entry, dict):
+            return False
+        if not _is_safe_topic(entry.get("topic", "")):
+            return False
+        if not _has_required_frontmatter(
+            entry.get("content", ""), ("name", "description", "type", "created")
+        ):
+            return False
+        src_files = entry.get("source_files", [])
+        if not isinstance(src_files, list):
+            return False
+        if any(not _is_safe_filename(src) for src in src_files):
+            return False
+    return True
 
 
 def _call_distill_llm(prompt: str, cfg: dict, error_log: Path) -> list[dict] | None:
@@ -295,9 +403,29 @@ def _validate_synthesis_output(data: dict) -> bool:
     for p in data["patterns"]:
         if not isinstance(p, dict):
             return False
-        for field in ("topic", "pattern_type", "skill_content"):
-            if not isinstance(p.get(field), str):
-                return False
+        if not _is_safe_topic(p.get("topic", "")):
+            return False
+        if p.get("pattern_type") not in ("guard", "workflow", "audit"):
+            return False
+        if not isinstance(p.get("skill_content"), str):
+            return False
+        if not _has_required_frontmatter(p["skill_content"], ("name", "description", "type")):
+            return False
+        try:
+            quality_score = int(p.get("quality_score", 3))
+        except (ValueError, TypeError):
+            quality_score = 0
+        if quality_score < 0 or quality_score > 3:
+            return False
+    for mem in data["memories"]:
+        if not isinstance(mem, dict):
+            return False
+        if not _is_safe_filename(mem.get("filename", "")):
+            return False
+        if not _has_required_frontmatter(
+            mem.get("content", ""), ("name", "description", "type", "created")
+        ):
+            return False
     return True
 
 
@@ -324,7 +452,8 @@ def _write_skill(topic: str, skill_content: str, skills_dir: Path,
 
     try:
         skill_dir.mkdir(parents=True, exist_ok=True)
-        skill_path.write_text(content, encoding="utf-8")
+        if not safe_write(skill_path, content):
+            raise OSError(f"safe_write failed: {skill_path}")
         print(f"[synthesize] skill written: {topic} (iteration {iteration})")
         return True
     except OSError as e:
@@ -370,7 +499,8 @@ def _write_memories(memories: list[dict], memory_dir: Path,
 
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
-            mem_path.write_text(content, encoding="utf-8")
+            if not safe_write(mem_path, content):
+                raise OSError(f"safe_write failed: {mem_path}")
             print(f"[synthesize] memory written ({mem_type}): {filename}")
         except OSError as e:
             print(f"[synthesize] failed to write memory {filename}: {e}", file=sys.stderr)
@@ -671,7 +801,7 @@ def _prune_memory_index(memory_index: Path, mapping: dict,
         print(f"[dry-run] MEMORY.md: {original_count} → {len(kept)} lines")
         return
 
-    memory_index.write_text("".join(kept), encoding="utf-8")
+    safe_write(memory_index, "".join(kept))
     print(f"[synthesize] MEMORY.md pruned: {original_count} → {len(kept)} lines")
 
 
@@ -679,6 +809,7 @@ def _prune_memory_index(memory_index: Path, mapping: dict,
 
 def run(dry_run: bool = False) -> int:
     cfg = load_config()
+    print(f"[synthesize] primary_project_dir = {get_path(cfg, 'primary_project_dir')}")
     error_log = get_path(cfg, "error_log")
 
     if not check_auth():
@@ -696,9 +827,21 @@ def run(dry_run: bool = False) -> int:
     skills_dir = Path.home() / ".claude" / "skills"
 
     # ── synth_state 讀取 ──────────────────────────────────────────
-    state = _load_synth_state(state_path)
+    state = _load_synth_state(state_path, get_path(cfg, "sessions_dir"))
 
-    # ── session 選取 ──────────────────────────────────────────────
+    # ── session 選取 / run 初始化 ─────────────────────────────────
+    if state.get("current_run_id") is None:
+        state["current_run_id"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        state["current_run_sessions"] = []
+        state["current_run_summary"] = ""
+        state["current_run_memories"] = []
+        state["current_run_created_skills"] = []
+        state["current_run_deleted_skills"] = []
+        for stage in ("patterns_done_at", "memories_done_at", "distill_done_at",
+                      "prune_done_at", "log_done_at"):
+            state[stage] = None
+
+    run_id = state["current_run_id"]
     sessions = _find_target_sessions(cfg, state)
     print(f"[synthesize] found {len(sessions)} sessions to analyze")
     if dry_run:
@@ -707,104 +850,180 @@ def run(dry_run: bool = False) -> int:
 
     if not sessions:
         print("[synthesize] no new sessions, skipping")
+        state["current_run_id"] = None
+        _save_synth_state(state_path, state, dry_run)
         return 0
 
-    # ── fragment 提取 ─────────────────────────────────────────────
-    friction_text, habit_text = _extract_all_fragments(sessions, cfg)
-    total_chars = len(friction_text) + len(habit_text)
-    print(f"[synthesize] fragments: friction={len(friction_text)}c, habit={len(habit_text)}c, total={total_chars}c")
+    if not state.get("current_run_sessions"):
+        state["current_run_sessions"] = [s.stem for s in sessions]
+        _save_synth_state(state_path, state, dry_run)
 
-    # ── skill 使用次數掃描 ────────────────────────────────────────
-    skill_usages = _scan_skill_usages(sessions)
-    print(f"[synthesize] skill usages this cycle: {skill_usages}")
+    try:
+        # ── patterns 階段：LLM call、skill 寫入、skill stats ───────
+        if state.get("patterns_done_at") != run_id:
+            friction_text, habit_text = _extract_all_fragments(sessions, cfg)
+            total_chars = len(friction_text) + len(habit_text)
+            print(f"[synthesize] fragments: friction={len(friction_text)}c, habit={len(habit_text)}c, total={total_chars}c")
 
-    # ── 組 prompt → LLM ──────────────────────────────────────────
-    min_evidence = get_int(cfg, SYNTH_STATE_KEY, "min_evidence_sessions", default=3)
-    existing_skills = _load_existing_skill_descriptions(skills_dir)
-    prompt = _build_synthesis_prompt(friction_text, habit_text, existing_skills, min_evidence)
+            skill_usages = _scan_skill_usages(sessions)
+            print(f"[synthesize] skill usages this cycle: {skill_usages}")
 
-    if dry_run:
-        print("[dry-run] prompt preview (first 600 chars):")
-        print(prompt[:600])
-        print("...\n[dry-run] skipping LLM call")
-        # 模擬空輸出
-        parsed = {"patterns": [], "memories": [], "synthesis_summary": "[dry-run]"}
-    else:
-        print("[synthesize] calling claude -p ...")
-        raw_output = run_claude(prompt, cfg)
-        if raw_output is None:
-            ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            append_log(error_log, f"[synthesize] [{ts}] LLM call failed")
-            return 1
+            min_evidence = get_int(cfg, SYNTH_STATE_KEY, "min_evidence_sessions", default=3)
+            existing_skills = _load_existing_skill_descriptions(skills_dir)
+            prompt = _build_synthesis_prompt(friction_text, habit_text, existing_skills, min_evidence)
 
-        parsed = _parse_synthesis_output(raw_output)
-        if parsed is None or not _validate_synthesis_output(parsed):
-            ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            msg = f"[synthesize] [{ts}] JSON parse/validate failed. raw:\n{(raw_output or '')[:500]}"
-            append_log(error_log, msg)
-            print("[synthesize] JSON parse failed → error.log only", file=sys.stderr)
-            return 1
+            if dry_run:
+                print("[dry-run] prompt preview (first 600 chars):")
+                print(prompt[:600])
+                print("...\n[dry-run] skipping LLM call")
+                parsed = {"patterns": [], "memories": [], "synthesis_summary": "[dry-run]"}
+            else:
+                print("[synthesize] calling claude -p ...")
+                raw_output = run_claude(prompt, cfg)
+                if raw_output is None:
+                    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    append_log(error_log, f"[synthesize] [{ts}] LLM call failed")
+                    return 1
 
-    patterns = parsed.get("patterns", [])
-    memories = parsed.get("memories", [])
-    summary = parsed.get("synthesis_summary", "")
-    print(f"[synthesize] patterns={len(patterns)}, memories={len(memories)}, summary={summary}")
+                parsed = _parse_synthesis_output(raw_output)
+                if parsed is None or not _validate_synthesis_output(parsed):
+                    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    msg = f"[synthesize] [{ts}] JSON parse/validate failed. raw:\n{(raw_output or '')[:500]}"
+                    append_log(error_log, msg)
+                    print("[synthesize] JSON parse failed → error.log only", file=sys.stderr)
+                    return 1
 
-    # ── Skill 寫入 ────────────────────────────────────────────────
-    skill_stats = state.setdefault("skill_stats", {})
-    created_skills: list[str] = []
+            patterns = parsed.get("patterns", [])
+            memories = parsed.get("memories", [])
+            summary = parsed.get("synthesis_summary", "")
+            print(f"[synthesize] patterns={len(patterns)}, memories={len(memories)}, summary={summary}")
 
-    for pattern in patterns:
-        topic = pattern.get("topic", "").strip()
-        skill_content = pattern.get("skill_content", "").strip()
-        if not topic or not skill_content:
-            continue
+            skill_stats = state.setdefault("skill_stats", {})
+            created_skills: list[str] = []
 
-        # quality gate
-        quality_score = int(pattern.get("quality_score", 3))
-        quality_reason = pattern.get("quality_reason", "未說明")
-        if quality_score < _QUALITY_SCORE_MIN:
-            print(f"[synthesize] skipped low-quality skill: {topic} (score={quality_score}, {quality_reason})")
-            continue
+            for pattern in patterns:
+                topic = pattern.get("topic", "").strip()
+                skill_content = pattern.get("skill_content", "").strip()
+                if not topic or not skill_content:
+                    continue
 
-        # 計算 iteration
-        existing_stat = skill_stats.get(topic, {})
-        iteration = len(existing_stat.get("cycle_usages", [])) + 1
+                try:
+                    quality_score = int(pattern.get("quality_score", 3))
+                except (ValueError, TypeError):
+                    quality_score = 0
+                quality_score = max(0, min(3, quality_score))
+                quality_reason = pattern.get("quality_reason", "未說明")
+                if quality_score < _QUALITY_SCORE_MIN:
+                    print(f"[synthesize] skipped low-quality skill: {topic} (score={quality_score}, {quality_reason})")
+                    continue
 
-        if _write_skill(topic, skill_content, skills_dir, iteration, dry_run):
-            created_skills.append(topic)
-            if topic not in skill_stats:
-                skill_stats[topic] = {"cycle_usages": [], "low_count": 0, "status": "active"}
+                existing_stat = skill_stats.get(topic, {})
+                iteration = len(existing_stat.get("cycle_usages", [])) + 1
 
-    # ── Memory 寫入 ───────────────────────────────────────────────
-    _write_memories(memories, memory_dir, memory_index, dry_run)
+                if _write_skill(topic, skill_content, skills_dir, iteration, dry_run):
+                    created_skills.append(topic)
+                    if topic not in skill_stats:
+                        skill_stats[topic] = {"cycle_usages": [], "low_count": 0, "status": "active"}
 
-    # ── Skill 使用率更新與清掃 ────────────────────────────────────
-    deleted_skills = _update_skill_stats(skill_stats, skill_usages, cfg, skills_dir, dry_run)
+            deleted_skills = _update_skill_stats(skill_stats, skill_usages, cfg, skills_dir, dry_run)
 
-    # ── Evolution log ─────────────────────────────────────────────
-    _append_evolution_log(evolution_log_path, summary, created_skills, deleted_skills, dry_run)
+            state["current_run_summary"] = summary
+            state["current_run_memories"] = memories
+            state["current_run_created_skills"] = created_skills
+            state["current_run_deleted_skills"] = deleted_skills
+            state["patterns_done_at"] = run_id
+            _save_synth_state(state_path, state, dry_run)
+        else:
+            print("[synthesize] patterns phase already done, skipping")
 
-    # ── Knowledge Base 蒸餾 ───────────────────────────────────────
-    if get_str(cfg, KB_KEY, "enabled", default="true").lower() != "false":
-        knowledge_dir = _resolve_knowledge_dir(cfg)
-        max_lines = get_int(cfg, KB_KEY, "memory_hot_max_lines", default=50)
+        memory_lock_path = data_dir / "memory.lock"
+        lock_ctx = nullcontext() if dry_run else FileLock(
+            memory_lock_path, timeout=30, stale_timeout=600
+        )
+        with lock_ctx:
+            if state.get("memories_done_at") != run_id:
+                _write_memories(state.get("current_run_memories", []), memory_dir,
+                                memory_index, dry_run)
+                state["memories_done_at"] = run_id
+                _save_synth_state(state_path, state, dry_run)
+            else:
+                print("[synthesize] memories phase already done, skipping")
 
-        new_mapping = _distill_memories(memory_dir, knowledge_dir, cfg, state, dry_run, error_log)
-        if new_mapping:
-            state.setdefault("distilled_mapping", {}).update(new_mapping)
+            knowledge_enabled_raw = get_str(cfg, KB_KEY, "enabled", default="true").lower()
+            legacy_knowledge_cfg = cfg.get("knowledge", {}) if isinstance(cfg, dict) else {}
+            legacy_knowledge_enabled = str(
+                legacy_knowledge_cfg.get("enabled", "")
+            ).lower()
+            has_legacy_primary_project = (
+                isinstance(cfg, dict) and bool(cfg.get("primary_project_dir"))
+            )
+            knowledge_enabled = (
+                knowledge_enabled_raw != "false"
+                and (legacy_knowledge_enabled != "false" or has_legacy_primary_project)
+            )
+            max_lines = get_int(cfg, KB_KEY, "memory_hot_max_lines", default=50)
 
-        _run_update_knowledge_tags(knowledge_dir, dry_run)
-        _prune_memory_index(memory_index, state.get("distilled_mapping", {}), max_lines, dry_run)
+            if state.get("distill_done_at") != run_id:
+                if knowledge_enabled:
+                    knowledge_dir = _resolve_knowledge_dir(cfg)
+                    new_mapping = _distill_memories(memory_dir, knowledge_dir, cfg, state, dry_run, error_log)
+                    if new_mapping:
+                        state.setdefault("distilled_mapping", {}).update(new_mapping)
+                    _run_update_knowledge_tags(knowledge_dir, dry_run)
+                state["distill_done_at"] = run_id
+                _save_synth_state(state_path, state, dry_run)
+            else:
+                print("[synthesize] distill phase already done, skipping")
 
-    # ── synth_state 更新 ──────────────────────────────────────────
+            if state.get("prune_done_at") != run_id:
+                if knowledge_enabled:
+                    knowledge_dir = _resolve_knowledge_dir(cfg)
+                    _prune_memory_index(memory_index, state.get("distilled_mapping", {}), max_lines, dry_run)
+                state["prune_done_at"] = run_id
+                _save_synth_state(state_path, state, dry_run)
+            else:
+                print("[synthesize] prune phase already done, skipping")
+
+        if state.get("log_done_at") != run_id:
+            _append_evolution_log(
+                evolution_log_path,
+                state.get("current_run_summary", ""),
+                state.get("current_run_created_skills", []),
+                state.get("current_run_deleted_skills", []),
+                dry_run,
+            )
+            state["log_done_at"] = run_id
+            _save_synth_state(state_path, state, dry_run)
+        else:
+            print("[synthesize] log phase already done, skipping")
+
+    except TimeoutError:
+        append_log(error_log, "[synthesize] memory.lock busy, aborting")
+        print("[synthesize] memory.lock busy, aborting", file=sys.stderr)
+        return 1
+    except Exception as e:
+        append_log(error_log, f"[synthesize] staged run failed: {e}")
+        print(f"[synthesize] staged run failed: {e}", file=sys.stderr)
+        return 1
+
+    # ── synth_state 完成更新 ──────────────────────────────────────
     state["sessions_since_last_synth"] = 0
-    state["last_synth_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if sessions:
-        state["last_synth_uuid"] = sessions[-1].stem
+        last_session = max(sessions, key=lambda p: (p.stat().st_mtime, p.stem))
+        state["last_synth_session_mtime"] = last_session.stat().st_mtime
+        state["last_synth_session_uuid"] = last_session.stem
+    state["current_run_id"] = None
+    state["current_run_summary"] = ""
+    state["current_run_memories"] = []
+    state["current_run_created_skills"] = []
+    state["current_run_deleted_skills"] = []
+    state["current_run_sessions"] = []
+    for stage in ("patterns_done_at", "memories_done_at", "distill_done_at",
+                  "prune_done_at", "log_done_at"):
+        state[stage] = None
     _save_synth_state(state_path, state, dry_run)
 
-    print(f"[synthesize] done. created={len(created_skills)}, deleted={len(deleted_skills)}")
+    print("[synthesize] done")
     return 0
 
 
