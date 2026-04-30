@@ -362,8 +362,9 @@ for src, dest in list(mapping.items())[:10]:
 **Claude 執行**：
 1. 刪除 Task Scheduler 任務：
    ```bash
-   schtasks /Delete /TN "Symbiont-evolve" /F
-   schtasks /Delete /TN "Symbiont-memory-audit" /F
+   schtasks /Delete /TN "symbiont-evolve" /F
+   schtasks /Delete /TN "symbiont-memory-audit" /F
+   schtasks /Delete /TN "symbiont-babysit" /F
    ```
 2. 從 `~/.claude/settings.json` 的 `hooks.Stop` 陣列移除含 `Symbiont-stop-hook` 的條目
 3. 刪除旗標檔：
@@ -438,20 +439,29 @@ for src, dest in list(mapping.items())[:10]:
 ### Stop hook 有觸發但 evolve.py 沒跑
 
 ```bash
-# 查 hook 觸發記錄
+# 確認 pending 旗標有沒有被寫入
+cat data/pending_evolve.txt   # 若不存在，hook 本身沒觸發
+
+# 查 evolve 執行記錄
 cat data/evolve_hook.log
 
-# 確認 pending 旗標有被清除
-cat data/pending_evolve.txt   # 若存在表示上次沒跑完
+# Windows：確認 Task Scheduler 任務在跑
+schtasks /Query /TN "symbiont-evolve"
 ```
+
+**Windows 架構說明**：Stop hook 只寫 `pending_evolve.txt`，不做背景執行。
+實際執行 evolve.py 的是 Task Scheduler 任務 `symbiont-evolve`（每 1 分鐘用 `pythonw.exe` 靜默 poll）。
+若任務不存在，重跑 `setup/setup_windows.bat`。
 
 常見原因：`claude CLI not found`（見上方「設定 claude CLI 路徑」）
 
 ### Task Scheduler 沒有觸發
 
 ```bash
-# Windows：確認任務存在
-schtasks /Query /TN "Symbiont-evolve"
+# Windows：確認任務存在（注意：任務名稱全小寫）
+schtasks /Query /TN "symbiont-evolve"
+schtasks /Query /TN "symbiont-memory-audit"
+schtasks /Query /TN "symbiont-babysit"
 
 # 若不存在，重跑安裝
 setup/setup_windows.bat

@@ -44,7 +44,7 @@ Symbiont/
 
 | 程式 | 輸入 | 輸出 | 排程 |
 |------|------|------|------|
-| `evolve.py` | 最新 .jsonl session log | CLAUDE.md 規則更新、evolution_log append | Stop hook 直接觸發（30秒延遲）；每 10 次後觸發 synthesize.py |
+| `evolve.py` | 最新 .jsonl session log | CLAUDE.md 規則更新、evolution_log append | Stop hook 寫 pending → Task Scheduler 每 1 分鐘 poll（Windows）；Mac/Linux 用 bash subshell 30秒延遲；每 10 次後觸發 synthesize.py |
 | `synthesize.py` | 最近 N 個 session 的 friction + habit 片段 | `~/.claude/skills/` 新建或迭代 skill、memory/thoughts/ 洞見、knowledge/<type>/ 蒸餾知識、低使用率 skill 清掃 | 由 evolve.py 計數觸發（每 10 次 session） |
 | `memory_audit.py` | memory/*.md 的 review_by 欄位 | archive 移動、MEMORY.md 更新 | 每天 02:00（Task Scheduler，開機補跑） |
 | `babysit.py` | for-claude/<agent>/ 新訊息 | claude-inbox/<agent>/ 回應 | 每 2 分鐘（Windows Service） |

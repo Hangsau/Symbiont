@@ -176,7 +176,7 @@ knowledge/KNOWLEDGE_TAGS.md  → grep index: grep "git" → relevant files
 synthesize:
   sessions_per_cycle: 10       # how many sessions before synthesis runs
   ctx_cap_chars: 12000         # total fragment size limit
-  min_evidence_sessions: 3     # pattern must appear in N sessions to generate a skill
+  min_evidence_sessions: 5     # pattern must appear in N sessions to generate a skill
   skill_stdev_multiplier: 2.0  # below mean - N×stdev = low-usage
   skill_low_cycles_to_delete: 2
 
@@ -289,8 +289,11 @@ Symbiont/
 │       ├── claude_runner.py       # claude -p subprocess wrapper (cross-platform)
 │       ├── file_ops.py            # Atomic writes, file locking, log rotation
 │       └── transport.py           # SSH/SCP + local file I/O transport abstraction
+├── scripts/
+│   ├── run_evolve.py          # Task Scheduler wrapper: pythonw.exe, no window (Windows)
+│   └── symbiont-stop-hook.sh  # Stop hook script (copied to ~/.claude/scripts/ on install)
 ├── setup/
-│   ├── setup_windows.bat      # Install: pip + Task Scheduler + Stop hook
+│   ├── setup_windows.bat      # Install: pip + Task Scheduler (1-min poll) + Stop hook
 │   ├── setup_memory.bat/.sh   # Initialize memory/ skeleton
 │   ├── uninstall_windows.bat  # Remove: tasks + hook + flag files
 │   └── uninstall_mac.sh
@@ -343,16 +346,22 @@ Claude Code session ends
         ▼ (Stop hook → ~/.claude/settings.json)
 symbiont-stop-hook.sh
         ├── writes data/pending_evolve.txt
-        ├── writes data/pending_audit.txt
-        └── launches evolve.py in background (30s delay)
+        └── writes data/pending_audit.txt
+             (Windows: Task Scheduler handles the rest)
+             (Mac/Linux: also launches evolve.py in background after 30s)
 
-On startup (Task Scheduler):
-        ├── pending_evolve.txt exists → run evolve.py
+Every 1 minute (Task Scheduler — Windows only):
+        └── scripts/run_evolve.py (via pythonw.exe, no window)
+                └── pending_evolve.txt exists → run evolve.py → delete pending
+
+On login (Task Scheduler — memory audit):
         └── pending_audit.txt exists → run memory_audit.py
 
 Every 2 minutes (Task Scheduler):
         └── run babysit.py
 ```
+
+> **Windows note**: bash subshell background processes (`&`) are killed when the hook exits. Symbiont uses Task Scheduler + `pythonw.exe` (the windowless Python launcher) so there are no flash windows and no dropped processes.
 
 ---
 
