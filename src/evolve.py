@@ -35,29 +35,6 @@ MAX_CLAUDE_MD_CHARS = 3000  # CLAUDE.md 傳入 prompt 的最大字數
 MAX_DISTILL_CONTEXT_CHARS = 3000  # 蒸餾 prompt 裡 claude_md_rest 的截斷上限
 PROCESSED_RECENT_LIMIT = 50
 
-_SAFE_FILENAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,80}\.md$")
-_SAFE_TOPIC_RE = re.compile(r"^[a-z][a-z0-9-]{0,60}$")
-
-
-# ── validation helpers ────────────────────────────────────────────
-
-def _is_safe_filename(s: str) -> bool:
-    return isinstance(s, str) and bool(_SAFE_FILENAME_RE.match(s))
-
-
-def _is_safe_topic(s: str) -> bool:
-    return isinstance(s, str) and bool(_SAFE_TOPIC_RE.match(s))
-
-
-def _has_required_frontmatter(content: str, required: tuple[str, ...]) -> bool:
-    if not isinstance(content, str):
-        return False
-    m = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
-    if not m:
-        return False
-    fm = m.group(1)
-    return all(re.search(rf"^{k}:\s*\S", fm, re.MULTILINE) for k in required)
-
 
 # ── state.json 操作 ───────────────────────────────────────────────
 

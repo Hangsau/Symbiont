@@ -976,7 +976,7 @@ mock LLM 在 distill 階段 raise，跑 synthesize 應記錄 `patterns_done_at` 
 
 ## 執行進度
 
-最後更新：2026-04-30（完成 16/19：上述 + M4-A，含 git reset 災難救援。pytest 70 → 102 條）
+最後更新：2026-04-30（完成 19/19：M1.1-A/B/C、M1.2-A、M1.3-A/B、M2.1-A/B/D、M2.2、M2.3、M3.1-3.6、M4-A、M4-B。pytest 70 → 102 條，包含中段 git reset 災難救援）
 
 | ID | 狀態 | Owner | 完成 | 備註 |
 |----|------|-------|------|------|
@@ -1003,20 +1003,19 @@ mock LLM 在 distill 階段 raise，跑 synthesize 應記錄 `patterns_done_at` 
 ### 狀態定義
 
 - **DONE**：實作完成且驗收通過（程式 task）或文件交付（設計 task）
+- **RESOLVED**：經設計討論做出決策、不需實作（如 M2.1-D 採 by-design 方案）
 - **IN PROGRESS**：有 owner 正在執行
 - **PENDING**：依賴解除、可派工
 - **BLOCKED**：仍有未完成的前置任務
 
-### 第二波可派工清單（依賴已解除）
+### 派工節奏（事後紀錄）
 
-- M1.1-C（Codex）：等 M1.1-A 跑過實環境驗證再派
-- M1.2-A（Codex）
-- M1.3-B（Codex）：依賴 M1.3-A
-- M2.1-A（Haiku）：機械任務
-- M2.1-B（Codex）：依賴 M1.3-A 與 M1.1-B
-- M2.2（Codex）
-- M2.3（Codex）
-- M4-A（Haiku）：機械任務
+實際派工順序（2026-04-30 同日完成）：
+1. Sonnet 設計 M1.1-B、M1.3-A 兩份 docs
+2. Codex 依序做 M1.1-A、M1.2-A、M1.3-B、M2.2、M2.1-B、M2.3、M1.1-C
+3. Haiku（spawn）做 M2.1-A、M3.1-3.6 七條測試/機械
+4. Sonnet 自己做 M4-A（中段 Haiku 跑 git reset 災難後手動還原並補做）+ M4-B
+5. M2.1-D 走設計討論決策，by-design 接受 single-writer
 
-建議派發節奏：先派一條 Codex 任務（M1.2-A）驗證品質一致性，OK 再批量派；Haiku 任務（M2.1-A、M4-A）可由 Sonnet session 用 `Agent(model="haiku")` 直接 spawn，不用走 codex。
+教訓：派 spawn agent 的 prompt 必須**明確禁止 git 操作**（reset / pull / checkout / restore / stash drop / rebase）。事件搶救工具見 `recovery/`。
 
