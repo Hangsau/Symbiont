@@ -85,6 +85,22 @@ if %ERRORLEVEL% EQU 0 (
     echo [警告] symbiont-evolve Task Scheduler 設定失敗（可手動執行）
 )
 
+REM session_wrap：每 1 分鐘 poll pending_session_wrap.txt，自動補跑 /wrap 的
+REM Memory Audit + Reflect 兩步（使用者忘跑 /wrap 時不會永久遺失）。
+REM 跟 evolve 同一觸發頻率，由 trigger-evolve.py 統一寫入 pending flag。
+set "SESSION_WRAP_CMD=\"%PYTHONW%\" \"%AGENT_DIR%\scripts\run_session_wrap.py\""
+
+schtasks /Query /TN "symbiont-session-wrap" >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    schtasks /Delete /TN "symbiont-session-wrap" /F >nul 2>&1
+)
+schtasks /Create /TN "symbiont-session-wrap" /TR %SESSION_WRAP_CMD% /SC MINUTE /MO 1 /RU "%USERNAME%" /F >nul
+if %ERRORLEVEL% EQU 0 (
+    echo       symbiont-session-wrap 已設定（每 1 分鐘靜默 poll，無視窗）
+) else (
+    echo [警告] symbiont-session-wrap Task Scheduler 設定失敗（可手動執行）
+)
+
 REM memory_audit 每小時觸發 + 內部 24h cooldown（pythonw.exe = 無視窗）
 REM 設計考量：固定時間 trigger（如 ONLOGON / DAILY HH:MM）對筆電/出差/Sleep
 REM 使用者不可靠（電腦不在開機 → 跳過 → 永遠等不到下次）。
