@@ -12,3 +12,4 @@ except Exception:
 
 (DATA_DIR / "pending_evolve.txt").write_text(session_id, encoding="utf-8")
 (DATA_DIR / "pending_audit.txt").write_text("triggered", encoding="utf-8")
+(DATA_DIR / "pending_session_wrap.txt").write_text(session_id, encoding="utf-8")
