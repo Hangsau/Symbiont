@@ -62,7 +62,7 @@ cat ~/.hermes/.env
 建立 `~/.hermes/config.yaml`，將 `TELEGRAM_ALLOWED_USERS` 的值填入（純整數，不加引號）：
 ```yaml
 model:
-  context_length: 32768
+  context_length: 131072
 
 fallback_providers:
   - model: meta-llama/llama-3.3-70b-instruct:free
