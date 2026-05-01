@@ -46,6 +46,9 @@ MIN_TURNS = 3                 # session turns 少於此數 → 跳過
 PROCESSED_RECENT_LIMIT = 50
 WRAP_DONE_MAX_AGE_SECS = 900  # 15 分鐘
 MEMORY_LOCK_TIMEOUT = 30      # FileLock timeout（秒）
+MAX_VERSION_SUFFIX = 100      # 檔名衝突時 _v2..._v99 嘗試上限
+ERROR_LOG_MAX_LINES = 2000    # rotate_log 觸發行數
+DESCRIPTION_MAX_LEN = 200     # candidate description 長度上限
 FILENAME_RE = re.compile(r"^[a-z0-9_]+\.md$")
 SLUG_RE = re.compile(r"^[a-z0-9-]+$")
 MALFORMED_DIR = "_malformed"
@@ -118,7 +121,7 @@ def _default_state() -> dict:
     }
 
 
-def _read_state(state_path: Path, sessions_dir: Path | None = None) -> dict:
+def _read_state(state_path: Path) -> dict:
     """讀取 session_wrap_state.json；損壞或不存在時回傳 default。"""
     raw = safe_read(state_path)
     if raw:
@@ -198,7 +201,7 @@ def _find_target_session(
             pending_path.unlink(missing_ok=True)
 
     # 3. fallback：cursor 之後最舊
-    state = _read_state(state_path, sessions_dir)
+    state = _read_state(state_path)
     candidates = find_sessions_after(
         sessions_dir,
         after_mtime=float(state.get("last_processed_mtime", 0.0) or 0.0),
@@ -279,49 +282,49 @@ def _extract_json(raw: str) -> dict | None:
 
 # ── Schema 驗證 ───────────────────────────────────────────────────
 
-def _validate_candidate(c: object) -> bool:
+def _validate_candidate(candidate: object) -> bool:
     """驗證 memory candidate 結構。"""
-    if not isinstance(c, dict):
+    if not isinstance(candidate, dict):
         return False
     for field in ("name", "description", "filename", "content"):
-        val = c.get(field)
+        val = candidate.get(field)
         if not isinstance(val, str) or not val.strip():
             return False
-    if c.get("type") not in ("feedback", "project", "reference"):
+    if candidate.get("type") not in ("feedback", "project", "reference"):
         return False
-    desc = c.get("description", "")
-    if len(desc) > 200:
+    desc = candidate.get("description", "")
+    if len(desc) > DESCRIPTION_MAX_LEN:
         return False
-    conf = c.get("confidence")
+    conf = candidate.get("confidence")
     if not isinstance(conf, (int, float)):
         return False
     if not (0.0 <= float(conf) <= 1.0):
         return False
-    fname = c.get("filename", "")
+    fname = candidate.get("filename", "")
     if not FILENAME_RE.match(fname):
         return False
     return True
 
 
-def _validate_insight(i: object) -> bool:
+def _validate_insight(insight: object) -> bool:
     """驗證 insight 結構。"""
-    if not isinstance(i, dict):
+    if not isinstance(insight, dict):
         return False
     for field in ("title", "description", "domain", "topic_slug"):
-        val = i.get(field)
+        val = insight.get(field)
         if not isinstance(val, str) or not val.strip():
             return False
-    if not SLUG_RE.match(i.get("topic_slug", "")):
+    if not SLUG_RE.match(insight.get("topic_slug", "")):
         return False
     # 三個 Q 欄位至少一個非空
-    qs = [
-        i.get("understanding_change", ""),
-        i.get("surprise_decision", ""),
-        i.get("next_time", ""),
+    q_values = [
+        insight.get("understanding_change", ""),
+        insight.get("surprise_decision", ""),
+        insight.get("next_time", ""),
     ]
-    if not any(isinstance(q, str) and q.strip() for q in qs):
+    if not any(isinstance(q, str) and q.strip() for q in q_values):
         return False
-    conf = i.get("confidence")
+    conf = insight.get("confidence")
     if not isinstance(conf, (int, float)):
         return False
     if not (0.0 <= float(conf) <= 1.0):
@@ -333,9 +336,9 @@ def _validate_insight(i: object) -> bool:
 
 def _make_frontmatter(candidate: dict, today_str: str) -> str:
     """依 SCHEMA.md 規格產生 frontmatter。"""
-    mem_type = candidate["type"]
+    memory_type = candidate["type"]
     # project / reference → review_by 今天 + 90 天；feedback → null
-    if mem_type in ("project", "reference"):
+    if memory_type in ("project", "reference"):
         review_by = (date.today() + timedelta(days=90)).isoformat()
     else:
         review_by = "null"
@@ -344,7 +347,7 @@ def _make_frontmatter(candidate: dict, today_str: str) -> str:
         f"---\n"
         f"name: {candidate['name']}\n"
         f"description: {candidate['description']}\n"
-        f"type: {mem_type}\n"
+        f"type: {memory_type}\n"
         f"created: {today_str}\n"
         f"valid_until: null\n"
         f"review_by: {review_by}\n"
@@ -481,7 +484,7 @@ def _resolve_filename(memory_dir: Path, filename: str) -> Path:
         return dest
     stem = dest.stem
     suffix = dest.suffix
-    for i in range(2, 100):
+    for i in range(2, MAX_VERSION_SUFFIX):
         candidate = memory_dir / f"{stem}_v{i}{suffix}"
         if not candidate.exists():
             return candidate
@@ -596,6 +599,23 @@ def _write_insight(
     return True
 
 
+# ── helpers ──────────────────────────────────────────────────────
+
+def _clear_pending_if_safe(pending_path: Path, dry_run: bool,
+                            explicit_uuid: str | None) -> None:
+    """正常路徑結束時清 pending flag。
+    dry_run / explicit_uuid 模式下保留（避免影響真實狀態）。"""
+    if not dry_run and pending_path.exists() and explicit_uuid is None:
+        pending_path.unlink(missing_ok=True)
+
+
+def _format_confidence(conf: object) -> str:
+    """容錯 confidence 格式化（非數字回 repr，避免 :.2f TypeError）。"""
+    if isinstance(conf, (int, float)):
+        return f"{float(conf):.2f}"
+    return repr(conf)
+
+
 # ── 主流程 ────────────────────────────────────────────────────────
 
 def run(
@@ -608,7 +628,7 @@ def run(
     root = Path(cfg["_root"])
     error_log = get_path(cfg, "error_log")
     audit_log = get_path(cfg, "audit_log")
-    rotate_log(error_log, max_lines=2000)
+    rotate_log(error_log, max_lines=ERROR_LOG_MAX_LINES)
 
     # 路徑解析
     state_path = root / get_str(cfg, "paths", "session_wrap_state",
@@ -651,8 +671,8 @@ def run(
 
             if age < WRAP_DONE_MAX_AGE_SECS:
                 print(f"[session_wrap] skip: wrap done within {age:.0f}s")
-                if not dry_run and pending_path.exists():
-                    pending_path.unlink(missing_ok=True)
+                # 外層 if 已限定 explicit_uuid is None
+                _clear_pending_if_safe(pending_path, dry_run, explicit_uuid)
                 return 0
 
     # ── 找目標 session ────────────────────────────────────────────
@@ -667,8 +687,7 @@ def run(
     if len(turns) < MIN_TURNS:
         print(f"[session_wrap] skip: session too short ({len(turns)} turns < {MIN_TURNS})")
         _write_state(state_path, uuid, jsonl_path, dry_run)
-        if not dry_run and pending_path.exists() and explicit_uuid is None:
-            pending_path.unlink(missing_ok=True)
+        _clear_pending_if_safe(pending_path, dry_run, explicit_uuid)
         return 0
 
     print(f"[session_wrap] parsed {len(turns)} turns from {uuid}")
@@ -720,21 +739,13 @@ def run(
     if not candidates_raw and not insight_raw:
         print("[session_wrap] 無 memory candidates 也無 insight，推進 cursor")
         _write_state(state_path, uuid, jsonl_path, dry_run)
-        if not dry_run and pending_path.exists() and explicit_uuid is None:
-            pending_path.unlink(missing_ok=True)
+        _clear_pending_if_safe(pending_path, dry_run, explicit_uuid)
         return 0
 
     # ── 取得 memory.lock（dry-run 跳過）─────────────────────────
     memory_lock_path = root / "data" / "memory.lock"
     lock = nullcontext() if dry_run else FileLock(memory_lock_path,
                                                    timeout=MEMORY_LOCK_TIMEOUT)
-    try:
-        lock.__enter__()
-    except TimeoutError:
-        msg = "[session_wrap] memory.lock busy → skipping (pending 留著，下次重試)"
-        append_log(audit_log, msg)
-        print(msg)
-        return 1
 
     today_str = date.today().isoformat()
     written_count = 0
@@ -742,68 +753,23 @@ def run(
     discarded_count = 0
 
     try:
-        # ── 處理 memory_candidates ────────────────────────────────
-        for c in candidates_raw:
-            if not isinstance(c, dict):
-                continue
-
-            # confidence < threshold → 直接丟棄，不寫任何地方
-            conf = c.get("confidence", 0.0)
-            if not isinstance(conf, (int, float)) or float(conf) < confidence_threshold:
-                discarded_count += 1
-                print(f"[session_wrap] discard (confidence={conf:.2f} < {confidence_threshold}): "
-                      f"{c.get('name', '?')}")
-                continue
-
-            # schema 驗證失敗 → _malformed/
-            if not _validate_candidate(c):
-                malformed_count += 1
-                raw_repr = json.dumps(c, ensure_ascii=False, indent=2)
-                _write_malformed(
-                    memory_dir,
-                    filename_hint=str(c.get("filename", "malformed.md")),
-                    raw_content=raw_repr,
-                    audit_log=audit_log,
-                    dry_run=dry_run,
-                )
-                continue
-
-            # existing_match → 跳過（不建立重複條目）
-            existing_match = c.get("existing_match")
-            if existing_match and isinstance(existing_match, str) and existing_match.strip():
-                print(f"[session_wrap] skip (existing_match={existing_match}): {c['name']}")
-                continue
-
-            if auto_write or dry_run:
-                ok = _write_memory_candidate(
-                    c, memory_dir, index_path, today_str, dry_run, audit_log
-                )
-                if ok:
-                    written_count += 1
-
-        # ── 處理 insight ──────────────────────────────────────────
-        if insight_raw and isinstance(insight_raw, dict):
-            conf = insight_raw.get("confidence", 0.0)
-            if not isinstance(conf, (int, float)) or float(conf) < confidence_threshold:
-                print(f"[session_wrap] discard insight (confidence={conf:.2f} < {confidence_threshold})")
-            elif not _validate_insight(insight_raw):
-                malformed_count += 1
-                raw_repr = json.dumps(insight_raw, ensure_ascii=False, indent=2)
-                slug = insight_raw.get("topic_slug", "insight")
-                _write_malformed(
-                    memory_dir,
-                    filename_hint=f"insight_{slug}.md",
-                    raw_content=raw_repr,
-                    audit_log=audit_log,
-                    dry_run=dry_run,
-                )
-            else:
-                if auto_write or dry_run:
-                    _write_insight(insight_raw, memory_dir, index_path,
-                                   today_str, dry_run, audit_log)
-
-    finally:
-        lock.__exit__(None, None, None)
+        with lock:
+            written_count, malformed_count, discarded_count = _process_outputs(
+                candidates_raw=candidates_raw,
+                insight_raw=insight_raw,
+                memory_dir=memory_dir,
+                index_path=index_path,
+                today_str=today_str,
+                confidence_threshold=confidence_threshold,
+                auto_write=auto_write,
+                dry_run=dry_run,
+                audit_log=audit_log,
+            )
+    except TimeoutError:
+        msg = "[session_wrap] memory.lock busy → skipping (pending 留著，下次重試)"
+        append_log(audit_log, msg)
+        print(msg)
+        return 1
 
     # ── 輸出摘要 ──────────────────────────────────────────────────
     print(f"[session_wrap] done: written={written_count}, "
@@ -811,11 +777,93 @@ def run(
 
     # ── 更新 cursor + 清 pending ──────────────────────────────────
     _write_state(state_path, uuid, jsonl_path, dry_run)
-    if not dry_run and pending_path.exists() and explicit_uuid is None:
-        pending_path.unlink(missing_ok=True)
-        print("[session_wrap] pending_session_wrap.txt cleared")
+    _clear_pending_if_safe(pending_path, dry_run, explicit_uuid)
 
     return 0
+
+
+# ── 處理 candidates + insight 的子流程（從 run() 拆出，降低 God Function 程度）─
+
+def _process_outputs(
+    *,
+    candidates_raw: list,
+    insight_raw: object,
+    memory_dir: Path,
+    index_path: Path,
+    today_str: str,
+    confidence_threshold: float,
+    auto_write: bool,
+    dry_run: bool,
+    audit_log: Path,
+) -> tuple[int, int, int]:
+    """處理所有 candidates 和 insight。回傳 (written, malformed, discarded)。
+    呼叫前必須持有 memory.lock。"""
+    written_count = 0
+    malformed_count = 0
+    discarded_count = 0
+
+    # ── 處理 memory_candidates ────────────────────────────────
+    for candidate in candidates_raw:
+        if not isinstance(candidate, dict):
+            continue
+
+        # confidence < threshold → 直接丟棄，不寫任何地方
+        conf = candidate.get("confidence", 0.0)
+        if not isinstance(conf, (int, float)) or float(conf) < confidence_threshold:
+            discarded_count += 1
+            print(f"[session_wrap] discard (confidence={_format_confidence(conf)} "
+                  f"< {confidence_threshold}): {candidate.get('name', '?')}")
+            continue
+
+        # schema 驗證失敗 → _malformed/
+        if not _validate_candidate(candidate):
+            malformed_count += 1
+            raw_repr = json.dumps(candidate, ensure_ascii=False, indent=2)
+            _write_malformed(
+                memory_dir,
+                filename_hint=str(candidate.get("filename", "malformed.md")),
+                raw_content=raw_repr,
+                audit_log=audit_log,
+                dry_run=dry_run,
+            )
+            continue
+
+        # existing_match → 跳過（不建立重複條目）
+        existing_match = candidate.get("existing_match")
+        if existing_match and isinstance(existing_match, str) and existing_match.strip():
+            print(f"[session_wrap] skip (existing_match={existing_match}): {candidate['name']}")
+            continue
+
+        if auto_write or dry_run:
+            ok = _write_memory_candidate(
+                candidate, memory_dir, index_path, today_str, dry_run, audit_log
+            )
+            if ok:
+                written_count += 1
+
+    # ── 處理 insight ──────────────────────────────────────────
+    if insight_raw and isinstance(insight_raw, dict):
+        conf = insight_raw.get("confidence", 0.0)
+        if not isinstance(conf, (int, float)) or float(conf) < confidence_threshold:
+            print(f"[session_wrap] discard insight "
+                  f"(confidence={_format_confidence(conf)} < {confidence_threshold})")
+        elif not _validate_insight(insight_raw):
+            malformed_count += 1
+            raw_repr = json.dumps(insight_raw, ensure_ascii=False, indent=2)
+            slug = insight_raw.get("topic_slug", "insight")
+            _write_malformed(
+                memory_dir,
+                filename_hint=f"insight_{slug}.md",
+                raw_content=raw_repr,
+                audit_log=audit_log,
+                dry_run=dry_run,
+            )
+        else:
+            if auto_write or dry_run:
+                _write_insight(insight_raw, memory_dir, index_path,
+                               today_str, dry_run, audit_log)
+
+    return written_count, malformed_count, discarded_count
 
 
 # ── CLI 入口 ──────────────────────────────────────────────────────
