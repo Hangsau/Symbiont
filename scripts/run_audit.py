@@ -1,8 +1,10 @@
 """
 run_audit.py — Task Scheduler wrapper for memory_audit.py (Windows, no window)
 
-Task Scheduler 登入後用 pythonw.exe 執行此腳本。
-有 pending_audit.txt 才跑 memory_audit.py，否則靜默退出。
+Task Scheduler 每日 04:00 用 pythonw.exe 執行此腳本，無條件跑 memory_audit.py。
+（原本的 pending_audit.txt gate 已移除：ONLOGON trigger 在 Win11 fast startup
+下幾乎永不觸發，改成 DAILY trigger 後不需要 hook 旗標補跑。
+trigger-evolve.py 仍會寫 pending_audit.txt 但不再被讀取，無害。）
 """
 
 import os
@@ -11,11 +13,7 @@ import subprocess
 from pathlib import Path
 
 agent_dir = Path(__file__).parent.parent
-pending   = agent_dir / "data" / "pending_audit.txt"
 log       = agent_dir / "data" / "audit_hook.log"
-
-if not pending.exists():
-    sys.exit(0)
 
 env = os.environ.copy()
 env["PYTHONIOENCODING"] = "utf-8"

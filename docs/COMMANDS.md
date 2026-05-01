@@ -225,9 +225,11 @@ python src/healthz.py --allow-partial  # 部分 agent SSH fail 仍視為健康
    - 腳本會建立 memory/ 目錄骨架並設 `enabled: true`
 2. 確認 Task Scheduler 任務已建立（`setup_windows.bat` 執行後自動建立）：
    ```powershell
-   Get-ScheduledTask -TaskName "symbiont-memory-audit"
+   Get-ScheduledTask -TaskName "symbiont-memory-audit" | Get-ScheduledTaskInfo |
+     Format-List LastRunTime, NextRunTime, LastTaskResult
    ```
-   任務在每次登入時執行 `scripts/run_audit.py`（有 pending_audit.txt 時執行）。
+   任務每日 04:00 無條件執行 `scripts/run_audit.py` → `memory_audit.py`。
+   （原 ONLOGON trigger 在 Win11 fast startup 下幾乎永不觸發，已改 DAILY）
 3. 驗證：`python src/memory_audit.py --dry-run`
 
 ---

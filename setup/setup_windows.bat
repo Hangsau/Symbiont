@@ -85,16 +85,18 @@ if %ERRORLEVEL% EQU 0 (
     echo [警告] symbiont-evolve Task Scheduler 設定失敗（可手動執行）
 )
 
-REM memory_audit 補跑：開機時若 pending_audit.txt 存在才跑（pythonw.exe = 無視窗）
+REM memory_audit 每日 04:00 跑（pythonw.exe = 無視窗）
+REM 原 ONLOGON trigger 在 Win11 fast startup 下幾乎永不觸發（task 從建立到觀察期內 0 次執行），改用 DAILY
+REM Task Scheduler 預設「missed run 開機後補跑」，凌晨關機亦會補上
 set "AUDIT_CMD=\"%PYTHONW%\" \"%AGENT_DIR%\scripts\run_audit.py\""
 
 schtasks /Query /TN "symbiont-memory-audit" >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     schtasks /Delete /TN "symbiont-memory-audit" /F >nul 2>&1
 )
-schtasks /Create /TN "symbiont-memory-audit" /TR %AUDIT_CMD% /SC ONLOGON /DELAY 0002:30 /RU "%USERNAME%" /F >nul
+schtasks /Create /TN "symbiont-memory-audit" /TR %AUDIT_CMD% /SC DAILY /ST 04:00 /RU "%USERNAME%" /F >nul
 if %ERRORLEVEL% EQU 0 (
-    echo       symbiont-memory-audit 已設定（登入後 2.5 分鐘補跑）
+    echo       symbiont-memory-audit 已設定（每日 04:00）
 ) else (
     echo [警告] symbiont-memory-audit Task Scheduler 設定失敗（可手動執行）
 )

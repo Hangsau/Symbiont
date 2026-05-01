@@ -316,7 +316,7 @@ Symbiont/
 ├── scripts/
 │   ├── trigger-evolve.py      # Stop hook: writes pending flag files only (no subprocess)
 │   ├── run_evolve.py          # Task Scheduler wrapper: polls pending_evolve.txt every 1 min (pythonw.exe, no window)
-│   ├── run_audit.py           # Task Scheduler wrapper: polls pending_audit.txt at login (pythonw.exe, no window)
+│   ├── run_audit.py           # Task Scheduler wrapper: runs memory_audit.py daily at 04:00 (pythonw.exe, no window)
 │   ├── run_babysit.py         # Task Scheduler wrapper: runs babysit.py every 2 min (pythonw.exe, no window)
 │   └── symbiont-stop-hook.sh  # Stop hook script for Mac/Linux (copied to ~/.claude/scripts/ on install)
 ├── setup/
@@ -384,8 +384,10 @@ Every 1 minute (Task Scheduler — Windows only):
         └── scripts/run_evolve.py (via pythonw.exe, no window)
                 └── pending_evolve.txt exists → run evolve.py → delete pending
 
-On login (Task Scheduler — memory audit):
-        └── pending_audit.txt exists → run memory_audit.py
+Daily at 04:00 (Task Scheduler — memory audit):
+        └── unconditionally run memory_audit.py
+            (Original ONLOGON trigger never fired under Win11 fast startup;
+             pending_audit.txt is still written by the Stop hook but no longer gates execution)
 
 Every 2 minutes (Task Scheduler):
         └── run babysit.py
