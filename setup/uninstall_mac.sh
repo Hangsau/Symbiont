@@ -20,6 +20,7 @@ PLISTS=(
     "com.symbiont.evolve.plist"
     "com.symbiont.memory-audit.plist"
     "com.symbiont.babysit.plist"
+    "com.symbiont.session-wrap.plist"
 )
 
 for plist in "${PLISTS[@]}"; do
@@ -60,7 +61,7 @@ else:
     print("      無 Symbiont hook，略過")
 PYEOF
 
-# ── 3. 刪除 wrap_done_file ───────────────────────────────────
+# ── 3. 刪除 wrap_done_file 及 session_wrap 狀態檔 ───────────
 echo
 echo "[3/3] 清除暫態旗標檔..."
 
@@ -70,6 +71,22 @@ if [ -f "$WRAP_DONE" ]; then
     echo "      已刪除：$WRAP_DONE"
 else
     echo "      不存在（略過）：$WRAP_DONE"
+fi
+
+SESSION_WRAP_STATE="$AGENT_DIR/data/session_wrap_state.json"
+if [ -f "$SESSION_WRAP_STATE" ]; then
+    rm "$SESSION_WRAP_STATE"
+    echo "      已刪除：$SESSION_WRAP_STATE"
+else
+    echo "      不存在（略過）：$SESSION_WRAP_STATE"
+fi
+
+SESSION_WRAP_PENDING="$AGENT_DIR/data/pending_session_wrap.txt"
+if [ -f "$SESSION_WRAP_PENDING" ]; then
+    rm "$SESSION_WRAP_PENDING"
+    echo "      已刪除：$SESSION_WRAP_PENDING"
+else
+    echo "      不存在（略過）：$SESSION_WRAP_PENDING"
 fi
 
 # ── 完成 ─────────────────────────────────────────────────────

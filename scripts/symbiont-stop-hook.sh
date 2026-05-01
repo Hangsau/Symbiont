@@ -96,6 +96,16 @@ else
         $PYTHON_CMD src/evolve.py --skip-if-wrap-done \
             >> "$DATA_DIR/evolve_hook.log" 2>&1
     ) &
-    echo "[symbiont-stop-hook] pending files written, evolve.py scheduled (30s)"
+    # session_wrap：補跑 /wrap 的 Memory Audit + Reflect 兩步
+    # pending_session_wrap.txt 由 trigger-evolve.py 統一寫入（跨平台共用）
+    (
+        sleep 35
+        cd "$AGENT_DIR"
+        if [ -f "$DATA_DIR/pending_session_wrap.txt" ]; then
+            $PYTHON_CMD src/session_wrap.py --skip-if-wrap-done \
+                >> "$DATA_DIR/session_wrap_hook.log" 2>&1
+        fi
+    ) &
+    echo "[symbiont-stop-hook] pending files written, evolve.py + session_wrap.py scheduled (30s/35s)"
 fi
 exit 0
