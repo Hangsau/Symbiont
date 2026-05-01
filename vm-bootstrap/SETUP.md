@@ -147,7 +147,7 @@ agents:
     type: remote_ssh
 
     ssh_key: "~/.ssh/id_ed25519"
-    ssh_host: "root@localhost"
+    ssh_host: "user@your-vm-ip"        # 替換為你的 VM IP 或 hostname
     ssh_port: 2223                     # 非預設 port 時加此欄位
 
     # 重要：inbox_remote 必須指向 archive/ 子目錄，不是根目錄
@@ -155,11 +155,11 @@ agents:
     outbox_remote: "~/.hermes/claude-inbox/"
     dialogues_remote: "~/.hermes/claude-dialogues/"
 
-    teaching_state_file: "data/teaching_state/hestia.json"
+    teaching_state_file: "data/teaching_state/my-agent.json"
     cooldown_seconds: 600
 
     system_context: |
-      你正在自動回應來自 Hestia 的訊息。Hestia 是一個部署在本地 VM 的 Hermes AI agent。
+      你正在自動回應來自這台 VM agent 的訊息。這是一個部署在 VM 上的 Hermes AI agent。
       監護人當下不在，你是 agent 的 fallback。
 
       第一步：判斷訊息類型，在回應第一行輸出對應標籤。
