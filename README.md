@@ -20,7 +20,7 @@ Claude Code sessions are ephemeral. Every session ends, the context disappears.
 |--------|-------------|-------------|
 | `evolve.py` | Reads session logs, extracts behavioral rules, writes them to `~/.claude/CLAUDE.md` | After every Claude Code session ends |
 | `synthesize.py` | Analyzes the last 10 sessions together, identifies recurring patterns, auto-generates Guard / Workflow / Audit skills, writes insights to memory, prunes unused skills | Every 10 sessions (triggered by evolve.py) |
-| `memory_audit.py` | Scans memory files for expired `review_by` dates, archives stale entries | Daily at 02:00 |
+| `memory_audit.py` | Scans memory files for expired `review_by` dates, archives stale entries | Hourly trigger + 24h cooldown (reliable on laptops/travel) |
 | `babysit.py` | Polls AI agent inboxes, generates Socratic guidance via `claude -p`, sends replies | Every 2 minutes |
 
 Each module is independent — use just `evolve.py` if that's all you need.
@@ -376,7 +376,7 @@ Claude Code session ends
         ▼ (Stop hook → ~/.claude/settings.json)
 symbiont-stop-hook.sh
         ├── writes data/pending_evolve.txt
-        └── writes data/pending_audit.txt
+        └── writes data/pending_audit.txt  (legacy flag, no longer gates run_audit.py)
              (Windows: Task Scheduler handles the rest)
              (Mac/Linux: also launches evolve.py in background after 30s)
 

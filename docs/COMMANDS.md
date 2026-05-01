@@ -394,11 +394,13 @@ for src, dest in list(mapping.items())[:10]:
    schtasks /Delete /TN "symbiont-babysit" /F
    ```
 2. 從 `~/.claude/settings.json` 的 `hooks.Stop` 陣列移除含 `Symbiont-stop-hook` 的條目
-3. 刪除旗標檔：
+3. 刪除旗標檔與 runtime state：
    ```bash
    rm -f ~/.claude/.wrap_done.txt
    rm -f [Symbiont路徑]/data/pending_evolve.txt
-   rm -f [Symbiont路徑]/data/pending_audit.txt
+   rm -f [Symbiont路徑]/data/pending_audit.txt   # legacy flag，已不再控制 audit
+   rm -f [Symbiont路徑]/data/last_audit_ts.txt   # audit cooldown timestamp
+   rm -f [Symbiont路徑]/data/heartbeat.json      # babysit 健康狀態
    ```
 4. 提示用戶手動刪除 Symbiont 資料夾（Claude 無法刪除自己正在讀取的目錄）
 
