@@ -134,7 +134,190 @@ cat ~/.hermes/gateway_state.json
 
 ---
 
-## Step 6（選用）：接上 Symbiont babysit
+## Step 6：建立 babysit Channel（VM 端）
+
+此步驟在 VM 上執行，建立讓 Symbiont babysit 能與這台 agent 雙向通訊的基礎設施。
+
+### 6a. 安裝依賴
+
+```bash
+pacman -S --noconfirm inotify-tools
+```
+
+### 6b. 建立目錄
+
+```bash
+mkdir -p ~/.hermes/for-claude/archive
+mkdir -p ~/.hermes/claude-inbox/processed
+mkdir -p ~/.hermes/claude-dialogues
+mkdir -p ~/scripts
+```
+
+### 6c. 寫入 inbox-watcher.sh
+
+建立 `~/scripts/inbox-watcher.sh`，內容如下：
+
+```bash
+#!/bin/bash
+# Watches claude-inbox/ for messages from babysit → triggers hermes to respond
+# Watches for-claude/ for agent-initiated messages → archives to for-claude/archive/
+
+INBOX_DIR="$HOME/.hermes/claude-inbox"
+FOR_CLAUDE_DIR="$HOME/.hermes/for-claude"
+ARCHIVE_DIR="$HOME/.hermes/for-claude/archive"
+SCRIPTS_DIR="$HOME/scripts"
+HERMES_BIN="/usr/local/bin/hermes"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$HOME/.hermes/logs/inbox-watcher.log"; }
+
+process_inbox() {
+    local file="$1"
+    [[ -f "$file" ]] || return
+    local content
+    content=$(cat "$file") || return
+    [[ -z "$content" ]] && { mv "$file" "$INBOX_DIR/processed/" 2>/dev/null; return; }
+
+    log "Processing: $(basename "$file")"
+    "$HERMES_BIN" -z "$content" --accept-hooks >> "$HOME/.hermes/logs/inbox-watcher.log" 2>&1
+    python3 "$SCRIPTS_DIR/extract_dialogue.py" >> "$HOME/.hermes/logs/inbox-watcher.log" 2>&1
+    mv "$file" "$INBOX_DIR/processed/" 2>/dev/null
+    log "Done: $(basename "$file")"
+}
+
+archive_for_claude() {
+    local file="$1"
+    [[ -f "$file" ]] || return
+    local ts; ts=$(date +%s)
+    cp "$file" "$ARCHIVE_DIR/${ts}_$(basename "$file")" && rm -f "$file"
+    log "Archived to for-claude: $(basename "$file")"
+}
+
+log "Inbox watcher started"
+
+inotifywait -m -e close_write,moved_to \
+    "$INBOX_DIR" \
+    "$FOR_CLAUDE_DIR" \
+    --format '%w %f' 2>/dev/null | while read dir fname; do
+    filepath="${dir}${fname}"
+    if [[ "$dir" == "$INBOX_DIR/" ]] && [[ "$fname" != processed ]]; then
+        process_inbox "$filepath"
+    elif [[ "$dir" == "$FOR_CLAUDE_DIR/" ]] && [[ "$fname" != archive ]]; then
+        archive_for_claude "$filepath"
+    fi
+done
+```
+
+設定執行權限：
+```bash
+chmod +x ~/scripts/inbox-watcher.sh
+```
+
+### 6d. 寫入 extract_dialogue.py
+
+建立 `~/scripts/extract_dialogue.py`，內容如下：
+
+```python
+#!/usr/bin/env python3
+"""從最新的 hermes session 提取 agent 回覆，寫入 claude-dialogues/"""
+import json, glob, os, time, sys
+
+sessions_dir = os.path.expanduser("~/.hermes/sessions")
+dialogues_dir = os.path.expanduser("~/.hermes/claude-dialogues")
+os.makedirs(dialogues_dir, exist_ok=True)
+
+# 找最新的 session 檔（排除 cron session）
+files = [f for f in glob.glob(f"{sessions_dir}/session_*.json") if "cron" not in f]
+if not files:
+    sys.exit(0)
+
+latest = max(files, key=os.path.getmtime)
+
+with open(latest) as f:
+    data = json.load(f)
+
+messages = data.get("messages", [])
+
+# 找最後一個 assistant 回覆
+reply = None
+for m in reversed(messages):
+    if not isinstance(m, dict) or m.get("role") != "assistant":
+        continue
+    content = m.get("content", "")
+    if isinstance(content, str) and content.strip():
+        reply = content.strip()
+        break
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "").strip()
+                if text:
+                    reply = text
+                    break
+        if reply:
+            break
+
+if not reply:
+    sys.exit(0)
+
+# 找第一個 user 訊息（Claude 送出的）
+user_msg = None
+for m in messages:
+    if isinstance(m, dict) and m.get("role") == "user":
+        c = m.get("content", "")
+        user_msg = c if isinstance(c, str) else ""
+        break
+
+agent_name = sys.argv[1] if len(sys.argv) > 1 else "Agent"
+ts = int(time.time())
+out = f"{dialogues_dir}/{ts}_chat.md"
+
+with open(out, "w", encoding="utf-8") as f:
+    if user_msg:
+        f.write(f"**Claude:**\n{user_msg.strip()}\n\n---\n\n")
+    f.write(f"**{agent_name}:**\n{reply}\n")
+
+print(f"Wrote {out}")
+```
+
+### 6e. 建立 systemd service
+
+建立 `/etc/systemd/system/hermes-inbox-watcher.service`，內容如下：
+
+```ini
+[Unit]
+Description=Hermes Claude Inbox Watcher
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/root/scripts/inbox-watcher.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 6f. 啟用並啟動
+
+```bash
+systemctl daemon-reload
+systemctl enable hermes-inbox-watcher.service
+systemctl start hermes-inbox-watcher.service
+systemctl status hermes-inbox-watcher.service
+```
+
+**成功條件：** `Active: active (running)` ✓
+
+**失敗排查：**
+- `journalctl -u hermes-inbox-watcher -n 20`：查 service 錯誤
+- `inotifywait --version`：確認 inotify-tools 已裝
+- `cat ~/.hermes/logs/inbox-watcher.log`：查 watcher 自己的 log
+
+---
+
+## Step 7（選用）：接上 Symbiont babysit（本機端）
 
 > 此步驟在**本機 Windows 的 Symbiont 目錄**執行，不在 VM 上。
 

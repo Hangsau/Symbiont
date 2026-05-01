@@ -65,8 +65,9 @@ bash vm-bootstrap/run.sh
 2. 從 `~/secrets.env` 寫入 `~/.hermes/.env` 和 `config.yaml`
 3. 啟動 hermes gateway
 4. 驗收：確認 gateway 狀態為 running 且 Telegram 已連線
+5. 建立 babysit channel 基礎設施（inbox-watcher + systemd service）
 
-> **注意**：vm-bootstrap 只負責安裝 Hermes（Phase 1-3）。constitution.md / USER.md 等 Foundation 設置仍需事後透過互動式 Claude Code 完成。
+> **注意**：vm-bootstrap 完成後，constitution.md / USER.md 等 Foundation 設置仍需事後透過互動式 Claude Code 完成。babysit 接入還需在**本機**的 `data/agents.yaml` 加入條目（見下方）。
 
 ### 路徑 B 完成後：接上 Symbiont babysit
 
