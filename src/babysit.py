@@ -51,6 +51,9 @@ NEEDS_HUMAN = "NEEDS_HUMAN_REVIEW"
 BABYSIT_MARKER = "generated_by: babysit"  # 自我生成標記，防無限 loop + filename prefix
 DEFAULT_COOLDOWN_SECONDS = 600           # agent_cfg 未指定時的 cooldown fallback
 
+HEARTBEAT_FILE = "data/heartbeat.json"
+HEARTBEAT_SCHEMA_VERSION = 1
+
 
 def _validate_agents_cfg(agents: dict) -> list[str]:
     """回傳錯誤訊息列表；空列表表示通過。"""
@@ -658,10 +661,31 @@ def _process_conversation_loop(agent_name: str, agent_cfg: dict, transport,
 DAEMON_INTERVAL_SECONDS = 120
 
 
+def _write_heartbeat(base_dir: Path, run_started_ts: float,
+                     agents_pinged: dict) -> None:
+    """寫入 babysit 健康狀態 snapshot。供 healthz.py 讀取。
+    寫失敗只 print warning，不 raise（heartbeat 失敗不該讓主流程出錯）。
+    """
+    payload = {
+        "schema_version": HEARTBEAT_SCHEMA_VERSION,
+        "last_run_ts": time.time(),
+        "last_run_duration_ms": int((time.time() - run_started_ts) * 1000),
+        "agents_pinged": agents_pinged,
+    }
+    try:
+        path = base_dir / HEARTBEAT_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        safe_write(path, json.dumps(payload, indent=2, ensure_ascii=False))
+    except OSError as e:
+        print(f"[babysit] heartbeat write failed: {e}", file=sys.stderr)
+
+
 def _do_babysit_work(enabled_agents: dict, cfg: dict, dry_run: bool,
                      base_dir: Path, error_log: Path,
                      teaching_timeout: int) -> None:
+    run_started_ts = time.time()
     all_state = _load_json_state(base_dir / STATE_FILE, {})
+    agents_pinged: dict = {}
 
     for agent_name, agent_cfg in enabled_agents.items():
         print(f"\n[babysit] 處理 agent: {agent_name}")
@@ -669,9 +693,12 @@ def _do_babysit_work(enabled_agents: dict, cfg: dict, dry_run: bool,
             transport = make_transport(agent_cfg)
         except ValueError as e:
             append_log(error_log, f"[{agent_name}] transport 建立失敗: {e}")
+            agents_pinged[agent_name] = {"ssh_ok": False, "checked_at_ts": time.time()}
             continue
 
-        if not transport.ping():
+        ssh_ok = transport.ping()
+        agents_pinged[agent_name] = {"ssh_ok": ssh_ok, "checked_at_ts": time.time()}
+        if not ssh_ok:
             append_log(error_log, f"[{agent_name}] 無法連線，跳過")
             print(f"[{agent_name}] ❌ 連線失敗，跳過")
             continue
@@ -690,6 +717,8 @@ def _do_babysit_work(enabled_agents: dict, cfg: dict, dry_run: bool,
         )
 
     _save_json_state(base_dir / STATE_FILE, all_state, dry_run, label="babysit state")
+    if not dry_run:
+        _write_heartbeat(base_dir, run_started_ts, agents_pinged)
 
 
 def _run_once(dry_run: bool, base_dir: Path, cfg: dict,
