@@ -270,6 +270,38 @@ python src/memory_audit.py             # 確認後真實執行
 
 ---
 
+## 手動觸發 session_wrap
+
+**用戶說**：「立刻跑一次 session_wrap」或「補跑 wrap 洞見」或「幫我補 memory」
+
+**Claude 執行**：
+```bash
+cd [Symbiont 路徑]
+python src/session_wrap.py --dry-run                          # 預覽：不寫任何 memory，印 LLM 輸出
+python src/session_wrap.py                                    # 真實執行（auto_write: true 時直接寫）
+python src/session_wrap.py --session-uuid <UUID>              # 指定特定 session（UUID 可從 .jsonl 路徑取）
+python src/session_wrap.py --skip-if-wrap-done                # 若 15 分鐘內有 wrap_done.txt，跳過
+```
+
+**旗標說明**：
+- `--dry-run`：不寫任何 memory 檔案，只印 LLM 輸出；搭配 `config.yaml` 的 `session_wrap.auto_write: false` 用於品質驗證
+- `--session-uuid UUID`：強制處理指定 session，跳過 cursor 判斷（診斷或補跑單一 session 用）
+- `--skip-if-wrap-done`：檢查 `~/.claude/.wrap_done.txt`，15 分鐘內存在則跳過（避免與手動 /wrap 重複）
+
+**降級開關**（`config.yaml`）：
+- `session_wrap.enabled: false`：完全停用自動 session_wrap，Task Scheduler wrapper 靜默跳過
+- `session_wrap.auto_write: false`：切 dry-run 模式（不寫 memory/），適合用 `--dry-run` 預覽品質後再手動確認
+
+**`_malformed/` 清理**：
+
+LLM 輸出不符 schema 時，session_wrap.py 將原始輸出寫入 `memory/_malformed/<timestamp>.md`，不污染主 memory/ 目錄。
+
+- **何時出現**：LLM 回傳格式不對（欄位缺失、JSON 損壞等）
+- **如何清理**：人工 review `_malformed/` 內容，可直接 `rm` 丟棄，或以 LLM 原始輸出為素材手動寫正確版進主 memory/
+- **不清理的後果**：純佔空間，不影響任何運作（不在 MEMORY.md 索引內，不被 synthesize.py 讀取）
+
+---
+
 ## 立即執行 evolve
 
 **用戶說**：「立刻跑一次 evolve」或「現在分析這個 session」
@@ -392,15 +424,18 @@ for src, dest in list(mapping.items())[:10]:
    schtasks /Delete /TN "symbiont-evolve" /F
    schtasks /Delete /TN "symbiont-memory-audit" /F
    schtasks /Delete /TN "symbiont-babysit" /F
+   schtasks /Delete /TN "symbiont-session-wrap" /F
    ```
 2. 從 `~/.claude/settings.json` 的 `hooks.Stop` 陣列移除含 `Symbiont-stop-hook` 的條目
 3. 刪除旗標檔與 runtime state：
    ```bash
    rm -f ~/.claude/.wrap_done.txt
    rm -f [Symbiont路徑]/data/pending_evolve.txt
-   rm -f [Symbiont路徑]/data/pending_audit.txt   # legacy flag，已不再控制 audit
-   rm -f [Symbiont路徑]/data/last_audit_ts.txt   # audit cooldown timestamp
-   rm -f [Symbiont路徑]/data/heartbeat.json      # babysit 健康狀態
+   rm -f [Symbiont路徑]/data/pending_audit.txt      # legacy flag，已不再控制 audit
+   rm -f [Symbiont路徑]/data/last_audit_ts.txt      # audit cooldown timestamp
+   rm -f [Symbiont路徑]/data/heartbeat.json         # babysit 健康狀態
+   rm -f [Symbiont路徑]/data/pending_session_wrap.txt  # session_wrap pending flag
+   rm -f [Symbiont路徑]/data/session_wrap_state.json   # session_wrap cursor
    ```
 4. 提示用戶手動刪除 Symbiont 資料夾（Claude 無法刪除自己正在讀取的目錄）
 
@@ -491,6 +526,7 @@ schtasks /Query /TN "symbiont-evolve"
 schtasks /Query /TN "symbiont-evolve"
 schtasks /Query /TN "symbiont-memory-audit"
 schtasks /Query /TN "symbiont-babysit"
+schtasks /Query /TN "symbiont-session-wrap"
 
 # 若不存在，重跑安裝
 setup/setup_windows.bat
