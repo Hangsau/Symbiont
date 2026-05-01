@@ -18,6 +18,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.babysit import HEARTBEAT_FILE  # 共用路徑常數，避免讀寫兩端不一致
+
 DEFAULT_MAX_AGE_SECONDS = 300  # 5 分鐘 = 2.5 倍 babysit 週期，容忍 1 次 lock skip
 
 
@@ -51,6 +54,8 @@ def evaluate(hb: dict | None, max_age_seconds: int,
         return False, ["heartbeat 缺少必要欄位（last_run_ts 或 agents_pinged）"]
     if not isinstance(last_run, (int, float)) or not isinstance(agents, dict):
         return False, ["heartbeat 欄位型別錯誤"]
+    if not all(isinstance(info, dict) for info in agents.values()):
+        return False, ["agents_pinged 內項目格式錯誤（非 dict）"]
 
     # 2. 檢查新鮮度（容忍時鐘漂移：未來時間視為健康）
     age = now_ts - last_run
@@ -95,7 +100,7 @@ def main():
 
     base_dir = Path(__file__).parent.parent
     hb_path = Path(args.heartbeat_file) if args.heartbeat_file \
-              else base_dir / "data" / "heartbeat.json"
+              else base_dir / HEARTBEAT_FILE
 
     hb = load_heartbeat(hb_path)
     healthy, msgs = evaluate(hb, args.max_age, args.allow_partial)

@@ -19,7 +19,8 @@ Symbiont/
 │   ├── evolve.py           # session 分析 → 規則寫入 CLAUDE.md
 │   ├── synthesize.py       # 跨 session 批次分析 → skill 生成 / memory 蒸餾
 │   ├── memory_audit.py     # review_by / archive / 容量管理
-│   ├── babysit.py          # agent 保母：poll inbox → 決策 → 回應
+│   ├── babysit.py          # agent 保母：poll inbox → 決策 → 回應（teaching/discussion 雙 mode）
+│   ├── healthz.py          # CLI：讀 heartbeat.json 回報 babysit 健康狀態
 │   └── utils/
 │       ├── session_reader.py      # 解析 .jsonl session log
 │       ├── friction_extractor.py  # 糾正信號提取（Guard skill 原料）
@@ -36,6 +37,7 @@ Symbiont/
 │   ├── synth_state.json    # synthesis cursor v2 + staged commit 欄位（gitignore）
 │   ├── memory.lock         # 自動建立：memory_audit / synthesize 共用鎖
 │   ├── babysit.lock        # 自動建立：babysit 並發保護
+│   ├── heartbeat.json      # babysit 每次執行寫入：last_run_ts + agents_pinged（healthz 讀）
 │   └── agents.yaml         # agent registry（gitignore，從 agents.example.yaml 複製）
 ├── scripts/
 │   ├── trigger-evolve.py      # Stop hook：寫三個 pending .txt 旗標，純檔案操作
@@ -60,7 +62,8 @@ Symbiont/
 | `evolve.py` | 最新 .jsonl session log | CLAUDE.md 規則更新、evolution_log append | Stop hook 寫 pending_evolve.txt → `scripts/run_evolve.py`（pythonw.exe）每 1 分鐘 poll；每 10 次後觸發 synthesize.py |
 | `synthesize.py` | 最近 N 個 session 的 friction + habit 片段 + 現有 skill descriptions | `~/.claude/skills/` 新建或迭代 skill（quality_score < 2 跳過）、memory/thoughts/ 洞見、knowledge/<type>/ 蒸餾知識、低使用率 skill 清掃 | 由 evolve.py 計數觸發（每 10 次 session） |
 | `memory_audit.py` | memory/*.md 的 review_by 欄位 | archive 移動、MEMORY.md 更新 | 登入時（`scripts/run_audit.py`，pythonw.exe，有 pending_audit.txt 才執行） |
-| `babysit.py` | for-claude/<agent>/ 新訊息 | claude-inbox/<agent>/ 回應 | 每 2 分鐘（`scripts/run_babysit.py`，pythonw.exe） |
+| `babysit.py` | for-claude/<agent>/ 新訊息 | claude-inbox/<agent>/ 回應；data/heartbeat.json | 每 2 分鐘（`scripts/run_babysit.py`，pythonw.exe）。LLM 第一行輸出 `MODE: teaching\|discussion` 標籤決定後續對話模式 |
+| `healthz.py` | data/heartbeat.json | stdout 健康報告 + exit code 0/1 | 手動 CLI（`python src/healthz.py [--max-age N] [--allow-partial] [--json]`） |
 
 ---
 
@@ -69,6 +72,12 @@ Symbiont/
 babysit.py 代表 Claude Code 回應 agent 訊息時，必須遵守共生計劃教學框架：
 - 完整原則見 `docs/SYMBIOSIS_TEACHING_GUIDE.md`
 - 核心：引導而非代做、Loud/Silent failure 介入判斷、結構化 Reflection、Skill 生命週期驗收
+
+**Mode 切換（dual-mode conversation）**：
+- LLM 在 inbox 第一輪回應的第一行輸出 `MODE: teaching` 或 `MODE: discussion`，固化進 `TeachingState.mode`
+- teaching 模式：蘇格拉底引導，達成輸出 `GOAL_ACHIEVED` 結束
+- discussion 模式：平等對話，話題自然結束輸出 `NO_REPLY_NEEDED` 結束
+- 標籤未輸出 / 不認識時 fallback `teaching`（保守選擇）
 
 ---
 

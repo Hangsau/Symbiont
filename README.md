@@ -195,23 +195,29 @@ knowledge_base:
 **Reactive mode** (agent writes to `for-claude/`):
 - Reads new messages from the agent's inbox
 - Calls `claude -p` with message + teaching context
-- Sends Socratic guidance back via SSH/SCP or local file write
+- LLM emits `MODE: teaching` or `MODE: discussion` on the first line to pick the conversation style
+- Sends the response (with the MODE tag stripped) back via SSH/SCP or local file write
 - Respects a cooldown period between replies
 
-**Proactive mode** (teaching loop):
-- Tracks active teaching sessions in `data/teaching_state/<agent>.json`
+**Proactive mode** (conversation loop):
+- Tracks active conversations in `data/teaching_state/<agent>.json` (incl. `mode` field)
 - Reads `claude-dialogues/` to check if the agent responded
-- Evaluates the response and generates the next guiding question
+- Picks prompt template based on `mode`:
+  - `teaching` → Socratic guidance, ends on `GOAL_ACHIEVED`
+  - `discussion` → equal-footing dialogue, ends on `NO_REPLY_NEEDED`
 - After 30 min with no reply: sends a follow-up, enters `timeout_warning` state
-- Ends on `GOAL_ACHIEVED` or max rounds
+- After another 30 min: auto-resets to `idle` (second-timeout safeguard)
+- Ends on completion sentinel or max rounds
 
 **Loop protection**: every outgoing message is tagged `generated_by: babysit-<timestamp>`. Messages with this tag are skipped on the next poll.
+
+**Liveness check**: `python src/healthz.py` reads `data/heartbeat.json` (written each `_do_babysit_work` run) and exits 0 (healthy) / 1 (stale or any agent SSH down). See `docs/COMMANDS.md` for flags.
 
 **Transport abstraction** (`agents.yaml`):
 ```yaml
 type: remote_ssh   # VM or remote Docker (SSH + SCP)
 type: local        # Same filesystem (Docker volumes, WSL2, local agents)
-                   # Note: teaching loop not supported with local transport
+                   # Note: conversation loop not supported with local transport
 ```
 
 ---

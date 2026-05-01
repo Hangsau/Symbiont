@@ -54,6 +54,24 @@ class TestEvaluate:
         healthy, _ = evaluate(bad, max_age_seconds=300)
         assert healthy is False
 
+    def test_malformed_agent_entry_returns_unhealthy(self):
+        """heartbeat 被手動編輯成 'talos': null 不該讓 healthz crash"""
+        bad = {
+            "last_run_ts": time.time(),
+            "agents_pinged": {"talos": None},
+        }
+        healthy, msgs = evaluate(bad, max_age_seconds=300)
+        assert healthy is False
+        assert any("格式錯誤" in m for m in msgs)
+
+    def test_malformed_agent_entry_string_returns_unhealthy(self):
+        bad = {
+            "last_run_ts": time.time(),
+            "agents_pinged": {"talos": "broken"},
+        }
+        healthy, _ = evaluate(bad, max_age_seconds=300)
+        assert healthy is False
+
     def test_stale_last_run_returns_unhealthy(self):
         hb = self._make_hb(last_run_ago_s=600)  # 10 min old
         healthy, msgs = evaluate(hb, max_age_seconds=300)

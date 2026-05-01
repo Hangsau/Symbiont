@@ -61,9 +61,34 @@ schtasks /Delete /TN "symbiont-babysit" /F
 **Claude 執行**：
 ```bash
 cd [Symbiont 路徑]
-python src/babysit.py --dry-run   # 先預覽
+python src/babysit.py --dry-run   # 先預覽（不寫 heartbeat、不送訊息）
 python src/babysit.py             # 確認後真實執行
 ```
+
+> Dry-run 會印 prompt preview；正式跑會在第一行 LLM 回應中解析 `MODE: teaching|discussion` 標籤決定後續對話風格。
+
+---
+
+## 檢查 babysit 健康狀態
+
+**用戶說**：「babysit 有沒有正常跑？」「健康檢查」「healthz」
+
+**Claude 執行**：
+```bash
+cd [Symbiont 路徑]
+python src/healthz.py               # 人類可讀；exit 0 健康 / 1 不健康
+python src/healthz.py --json        # 機器可讀
+python src/healthz.py --max-age 600 # 自訂新鮮度閾值（秒，預設 300）
+python src/healthz.py --allow-partial  # 部分 agent SSH fail 仍視為健康
+```
+
+判斷邏輯：
+- `data/heartbeat.json` 不存在 / 損壞 / 缺欄位 → unhealthy
+- `last_run_ts` 距現在超過 `--max-age`（預設 5 分鐘 = 2.5 倍 babysit 週期）→ unhealthy
+- 任一 agent SSH ping fail → unhealthy（除非 `--allow-partial` 且至少一個通）
+- 全綠 → healthy + `[healthz] OK` + 簡潔狀態行
+
+進階：作業系統層級活體檢查可加查 `Get-ScheduledTask -TaskName 'symbiont-babysit' | Get-ScheduledTaskInfo` 看 `LastTaskResult` / `NumberOfMissedRuns`。
 
 ---
 
