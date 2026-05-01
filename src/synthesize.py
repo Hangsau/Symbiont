@@ -23,7 +23,6 @@ from contextlib import nullcontext
 import json
 import re
 import statistics
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,10 +44,22 @@ from src.utils.knowledge_writer import (
 # ── 常數 ──────────────────────────────────────────────────────────
 
 SYNTH_STATE_KEY = "synthesize"
+KB_KEY = "knowledge_base"
 MAX_TURNS_PER_SESSION = 50
-_EXISTING_SKILL_MAX = 30       # 最多讀幾個現有 skill
-_EXISTING_SKILL_DESC_CHARS = 80  # 每條 description 截斷字數
-_QUALITY_SCORE_MIN = 2         # 低於此分數的 skill 不寫入
+_EXISTING_SKILL_MAX = 30           # 最多讀幾個現有 skill
+_EXISTING_SKILL_DESC_CHARS = 80    # 每條 description 截斷字數
+_QUALITY_SCORE_MIN = 2             # 低於此分數的 skill 不寫入
+_EXISTING_FILE_READ_CHARS = 500    # 蒸餾時讀現有 knowledge 每檔上限
+_RAW_FILE_READ_CHARS = 600         # 蒸餾時讀原始 memory 每檔上限
+
+# 類型前綴 → knowledge/ 子目錄
+_TYPE_MAP = {
+    "feedback": "feedback",
+    "project": "project",
+    "reference": "reference",
+    "user": "user",
+    "reflection": "thoughts",
+}
 
 _SAFE_FILENAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,80}\.md$")
 _SAFE_TOPIC_RE = re.compile(r"^[a-z][a-z0-9-]{0,60}$")
@@ -605,19 +616,6 @@ def _append_evolution_log(log_path: Path, summary: str,
 
 # ── Knowledge Base 蒸餾 ───────────────────────────────────────────
 
-KB_KEY = "knowledge_base"
-_EXISTING_FILE_READ_CHARS = 500   # existing knowledge 每檔讀取上限
-_RAW_FILE_READ_CHARS = 600        # raw memory 每檔讀取上限
-
-# 類型前綴 → knowledge/ 子目錄對應
-_TYPE_MAP = {
-    "feedback": "feedback",
-    "project": "project",
-    "reference": "reference",
-    "user": "user",
-    "reflection": "thoughts",
-}
-
 DISTILL_PROMPT = """\
 你是記憶蒸餾系統。將以下多條 {mem_type} 類型的原始記憶蒸餾為精煉知識條目。
 
@@ -655,6 +653,21 @@ def _resolve_knowledge_dir(cfg: dict) -> Path:
     return get_path(cfg, "primary_project_dir") / "knowledge"
 
 
+def _collect_chunks_under_cap(files: list[Path], per_file_limit: int,
+                              total_cap: int) -> list[str]:
+    """讀檔組 chunks，總長度不超過 total_cap；單檔內容截斷至 per_file_limit。"""
+    parts: list[str] = []
+    total = 0
+    for f in files:
+        text = f.read_text(encoding="utf-8", errors="replace")[:per_file_limit]
+        chunk = f"### {f.name}\n{text}\n"
+        if total + len(chunk) > total_cap:
+            break
+        parts.append(chunk)
+        total += len(chunk)
+    return parts
+
+
 def _load_existing_knowledge(knowledge_dir: Path, mem_type: str,
                               ctx_cap: int) -> str:
     """讀取 knowledge/<type>/ 現有條目，供蒸餾時比對（總量限制 ctx_cap/2）。"""
@@ -662,16 +675,7 @@ def _load_existing_knowledge(knowledge_dir: Path, mem_type: str,
     if not type_dir.exists():
         return "（尚無既有知識）"
     files = sorted(type_dir.glob("*.md"))
-    parts: list[str] = []
-    total = 0
-    half_cap = ctx_cap // 2
-    for f in files:
-        text = f.read_text(encoding="utf-8", errors="replace")[:_EXISTING_FILE_READ_CHARS]
-        chunk = f"### {f.name}\n{text}\n"
-        if total + len(chunk) > half_cap:
-            break
-        parts.append(chunk)
-        total += len(chunk)
+    parts = _collect_chunks_under_cap(files, _EXISTING_FILE_READ_CHARS, ctx_cap // 2)
     return "\n".join(parts) if parts else "（尚無既有知識）"
 
 
@@ -704,18 +708,7 @@ def _distill_memories(memory_dir: Path, knowledge_dir: Path,
 
         print(f"[synthesize] distilling {len(files)} {kb_type} memories...")
 
-        # 讀原始記憶內容
-        raw_parts: list[str] = []
-        total = 0
-        half_cap = ctx_cap // 2
-        for f in files:
-            text = f.read_text(encoding="utf-8", errors="replace")
-            chunk = f"### {f.name}\n{text[:_RAW_FILE_READ_CHARS]}\n"
-            if total + len(chunk) > half_cap:
-                break
-            raw_parts.append(chunk)
-            total += len(chunk)
-
+        raw_parts = _collect_chunks_under_cap(files, _RAW_FILE_READ_CHARS, ctx_cap // 2)
         raw_memories = "\n".join(raw_parts)
         existing = _load_existing_knowledge(knowledge_dir, kb_type, ctx_cap)
 
@@ -756,7 +749,7 @@ def _distill_memories(memory_dir: Path, knowledge_dir: Path,
     return mapping
 
 
-def _run_update_knowledge_tags(knowledge_dir: Path, dry_run: bool) -> None:
+def _rebuild_knowledge_tags(knowledge_dir: Path, dry_run: bool) -> None:
     """重建 KNOWLEDGE_TAGS.md。"""
     tags_path = knowledge_dir / "KNOWLEDGE_TAGS.md"
     if dry_run:
@@ -766,6 +759,25 @@ def _run_update_knowledge_tags(knowledge_dir: Path, dry_run: bool) -> None:
     tag_count = sum(1 for line in tags_path.read_text(encoding="utf-8").splitlines()
                     if line.startswith("|") and "tag" not in line and "---" not in line)
     print(f"[synthesize] KNOWLEDGE_TAGS.md rebuilt: {tag_count} tag entries")
+
+
+def _is_knowledge_base_enabled(cfg: dict) -> bool:
+    """判斷是否啟用 knowledge base 蒸餾。
+
+    新 schema：`knowledge_base.enabled: true`
+    Legacy fallback：舊 config 用 `knowledge.enabled` 或推導自 `primary_project_dir` 存在
+    （留著向後相容；新部署可直接刪 legacy 路徑）。
+    """
+    new_enabled = get_str(cfg, KB_KEY, "enabled", default="true").lower() != "false"
+
+    if not isinstance(cfg, dict):
+        return new_enabled
+
+    legacy_cfg = cfg.get("knowledge", {})
+    legacy_enabled = str(legacy_cfg.get("enabled", "")).lower() != "false"
+    has_primary_project = bool(cfg.get("primary_project_dir"))
+
+    return new_enabled and (legacy_enabled or has_primary_project)
 
 
 def _prune_memory_index(memory_index: Path, mapping: dict,
@@ -949,18 +961,7 @@ def run(dry_run: bool = False) -> int:
             else:
                 print("[synthesize] memories phase already done, skipping")
 
-            knowledge_enabled_raw = get_str(cfg, KB_KEY, "enabled", default="true").lower()
-            legacy_knowledge_cfg = cfg.get("knowledge", {}) if isinstance(cfg, dict) else {}
-            legacy_knowledge_enabled = str(
-                legacy_knowledge_cfg.get("enabled", "")
-            ).lower()
-            has_legacy_primary_project = (
-                isinstance(cfg, dict) and bool(cfg.get("primary_project_dir"))
-            )
-            knowledge_enabled = (
-                knowledge_enabled_raw != "false"
-                and (legacy_knowledge_enabled != "false" or has_legacy_primary_project)
-            )
+            knowledge_enabled = _is_knowledge_base_enabled(cfg)
             max_lines = get_int(cfg, KB_KEY, "memory_hot_max_lines", default=50)
 
             if state.get("distill_done_at") != run_id:
@@ -969,7 +970,7 @@ def run(dry_run: bool = False) -> int:
                     new_mapping = _distill_memories(memory_dir, knowledge_dir, cfg, state, dry_run, error_log)
                     if new_mapping:
                         state.setdefault("distilled_mapping", {}).update(new_mapping)
-                    _run_update_knowledge_tags(knowledge_dir, dry_run)
+                    _rebuild_knowledge_tags(knowledge_dir, dry_run)
                 state["distill_done_at"] = run_id
                 _save_synth_state(state_path, state, dry_run)
             else:

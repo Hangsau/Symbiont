@@ -190,7 +190,7 @@ class TestResumeSkipsCompletedPhases:
              patch("src.synthesize.run_claude", side_effect=track_run_claude), \
              patch("src.synthesize._write_memories", return_value=None), \
              patch("src.synthesize._distill_memories", return_value={}), \
-             patch("src.synthesize._run_update_knowledge_tags", return_value=None), \
+             patch("src.synthesize._rebuild_knowledge_tags", return_value=None), \
              patch("src.synthesize._prune_memory_index", return_value=None), \
              patch("src.synthesize._append_evolution_log", return_value=None), \
              patch("src.synthesize.FileLock") as mock_lock:
@@ -332,7 +332,7 @@ class TestRunIdClearedAfterCompletion:
              patch("src.synthesize._update_skill_stats", return_value=[]), \
              patch("src.synthesize._write_memories", return_value=None), \
              patch("src.synthesize._distill_memories", return_value={}), \
-             patch("src.synthesize._run_update_knowledge_tags", return_value=None), \
+             patch("src.synthesize._rebuild_knowledge_tags", return_value=None), \
              patch("src.synthesize._prune_memory_index", return_value=None), \
              patch("src.synthesize._append_evolution_log", return_value=None), \
              patch("src.synthesize.FileLock") as mock_lock:
