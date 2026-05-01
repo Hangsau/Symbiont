@@ -197,7 +197,7 @@ log "Inbox watcher started"
 inotifywait -m -e close_write,moved_to \
     "$INBOX_DIR" \
     "$FOR_CLAUDE_DIR" \
-    --format '%w %f' 2>/dev/null | while read dir fname; do
+    --format '%w\t%f' 2>/dev/null | while IFS=$'\t' read -r dir fname; do
     filepath="${dir}${fname}"
     if [[ "$dir" == "$INBOX_DIR/" ]] && [[ "$fname" != processed ]]; then
         process_inbox "$filepath"
@@ -232,8 +232,11 @@ if not files:
 
 latest = max(files, key=os.path.getmtime)
 
-with open(latest) as f:
-    data = json.load(f)
+try:
+    with open(latest) as f:
+        data = json.load(f)
+except (json.JSONDecodeError, OSError):
+    sys.exit(0)
 
 messages = data.get("messages", [])
 
@@ -263,12 +266,12 @@ if not reply:
 user_msg = None
 for m in messages:
     if isinstance(m, dict) and m.get("role") == "user":
-        c = m.get("content", "")
-        user_msg = c if isinstance(c, str) else ""
+        content = m.get("content", "")
+        user_msg = content if isinstance(content, str) else ""
         break
 
 agent_name = sys.argv[1] if len(sys.argv) > 1 else "Agent"
-ts = int(time.time())
+ts = int(time.time() * 1000)
 out = f"{dialogues_dir}/{ts}_chat.md"
 
 with open(out, "w", encoding="utf-8") as f:
