@@ -57,12 +57,11 @@ cat ~/.hermes/.env
 ```yaml
 model:
   provider: openrouter
-  default: meta-llama/llama-3.3-70b-instruct:free
+  default: openrouter/free
   context_length: 131072
 
-fallback_providers:
-  - model: meta-llama/llama-3.3-70b-instruct:free
-    provider: openrouter
+auxiliary:
+  provider: openrouter
 
 telegram:
   allowed_users: <TELEGRAM_ALLOWED_USERS 的數字值，純整數>
@@ -71,7 +70,8 @@ telegram:
 
 **重要**：
 - `model.provider: openrouter` 讓 hermes 讀取 `OPENROUTER_API_KEY`
-- `model.default` 是 model ID，使用 `vendor/model-id:free` 格式
+- `model.default: openrouter/free` 讓 OpenRouter 自動選當前可用的免費模型（無需指定 model ID）
+- `auxiliary.provider: openrouter` 設定 context compression 用的 auxiliary LLM，避免啟動警告
 - `context_length: 131072` 必須 ≥ 64000，否則 hermes 啟動失敗
 - `allowed_users` 必須是整數，不要加引號
 
