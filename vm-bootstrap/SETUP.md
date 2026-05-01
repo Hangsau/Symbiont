@@ -131,3 +131,56 @@ cat ~/.hermes/gateway_state.json
 [Gateway 狀態摘要]
 [成功 / 失敗及具體原因]
 ```
+
+---
+
+## Step 6（選用）：接上 Symbiont babysit
+
+> 此步驟在**本機 Windows 的 Symbiont 目錄**執行，不在 VM 上。
+
+Hermes Gateway 起來後，如果要讓本機 Symbiont 的 `babysit.py` 自動回應這台 VM agent 的訊息，需要在 `data/agents.yaml` 加入以下條目（從 `data/agents.example.yaml` 複製後修改）：
+
+```yaml
+agents:
+  hestia:                              # agent 名稱（自訂）
+    enabled: true
+    type: remote_ssh
+
+    ssh_key: "~/.ssh/id_ed25519"
+    ssh_host: "root@localhost"
+    ssh_port: 2223                     # 非預設 port 時加此欄位
+
+    # 重要：inbox_remote 必須指向 archive/ 子目錄，不是根目錄
+    inbox_remote: "~/.hermes/for-claude/archive/"
+    outbox_remote: "~/.hermes/claude-inbox/"
+    dialogues_remote: "~/.hermes/claude-dialogues/"
+
+    teaching_state_file: "data/teaching_state/hestia.json"
+    cooldown_seconds: 600
+
+    system_context: |
+      你正在自動回應來自 Hestia 的訊息。Hestia 是一個部署在本地 VM 的 Hermes AI agent。
+      監護人當下不在，你是 agent 的 fallback。
+
+      第一步：判斷訊息類型，在回應第一行輸出對應標籤。
+
+      A. Agent 遇到問題或有疑問 → `MODE: teaching`（蘇格拉底引導，達成輸出 GOAL_ACHIEVED）
+      B. Agent 給出建議／分析報告 → `MODE: discussion`（評估內容，給實質回應）
+      C. 聊天或討論 → `MODE: discussion`（自然參與）
+      D. 純狀態報告 → `NO_REPLY_NEEDED`
+      E. 需要監護人授權 → `NEEDS_HUMAN_REVIEW: [原因]`
+```
+
+**注意事項：**
+- `babysit.py` 讀取方向：`for-claude/archive/` → Claude → `claude-inbox/`（Hermes Gateway 自動監聽）
+- `inbox_remote` 根目錄（`for-claude/`）永遠是空的，訊息進來會被即時歸檔到 `archive/`
+- `ssh_port` 欄位為非標準 port 專用，標準 port 22 可省略
+
+**端到端驗收：**
+```bash
+# 本機執行 babysit 一次（dry-run 先確認讀得到）
+python src/babysit.py --dry-run
+
+# 確認後真實執行
+python src/babysit.py
+```
