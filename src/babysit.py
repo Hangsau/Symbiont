@@ -45,6 +45,9 @@ DEAD_LETTER_MAX_RETRIES = 5      # dead letter 超過此次數後放棄
 NO_REPLY = "NO_REPLY_NEEDED"
 NEEDS_HUMAN = "NEEDS_HUMAN_REVIEW"
 
+BABYSIT_MARKER = "generated_by: babysit"  # 自我生成標記，防無限 loop + filename prefix
+DEFAULT_COOLDOWN_SECONDS = 600           # agent_cfg 未指定時的 cooldown fallback
+
 
 def _validate_agents_cfg(agents: dict) -> list[str]:
     """回傳錯誤訊息列表；空列表表示通過。"""
@@ -90,9 +93,42 @@ def _parse_sentinel(response: str) -> str:
         return "goal_achieved"
     if first_line.startswith(NEEDS_HUMAN):
         return "needs_human"
-    if first_line == NO_REPLY:
+    if first_line.startswith(NO_REPLY):
         return "no_reply"
     return "reply"
+
+
+_MODE_RE = re.compile(r"^\s*\**\s*MODE\s*\**\s*:\s*(\w+)", re.IGNORECASE)
+
+
+def _parse_mode(response: str) -> str:
+    """從 LLM 回應第一行解析 MODE 標籤。
+    未找到或不認識的 mode → fallback DEFAULT_MODE（teaching，較保守）。
+
+    Returns: 'teaching' | 'discussion'
+    """
+    first_line = response.strip().split("\n")[0]
+    m = _MODE_RE.match(first_line)
+    if not m:
+        return DEFAULT_MODE
+    mode = m.group(1).lower()
+    if mode not in VALID_MODES:
+        return DEFAULT_MODE
+    return mode
+
+
+def _strip_mode_line(response: str) -> str:
+    """剝除 LLM 回應第一行的 MODE 標籤（含後續空行），讓送給 agent 的內容乾淨。
+    若第一行不是 MODE 標籤則原樣返回。
+    """
+    lines = response.lstrip().split("\n")
+    if not lines or not _MODE_RE.match(lines[0]):
+        return response
+    # 跳過 MODE 行 + 緊接的空行
+    idx = 1
+    while idx < len(lines) and lines[idx].strip() == "":
+        idx += 1
+    return "\n".join(lines[idx:])
 
 DRY_RUN_PREVIEW_CHARS = 400      # dry-run prompt 預覽字數
 MAX_PROCESSED_INBOX_HISTORY = 200  # babysit_state.json 保留的已處理 inbox 檔名數
@@ -121,9 +157,15 @@ class AgentState:
         }
 
 
+VALID_MODES = ("teaching", "discussion")
+DEFAULT_MODE = "teaching"
+
+
 @dataclass
 class TeachingState:
+    """跨輪次對話狀態。雖名為 TeachingState，實際支援 teaching 與 discussion 兩種 mode。"""
     status: str = "idle"
+    mode: str = DEFAULT_MODE
     goal: str = ""
     last_question: str = ""
     current_round: int = 1
@@ -136,8 +178,12 @@ class TeachingState:
 
     @classmethod
     def from_dict(cls, d: dict) -> "TeachingState":
+        mode = d.get("mode", DEFAULT_MODE)
+        if mode not in VALID_MODES:
+            mode = DEFAULT_MODE
         return cls(
             status=d.get("status", "idle"),
+            mode=mode,
             goal=d.get("goal", ""),
             last_question=d.get("last_question", ""),
             current_round=int(d.get("current_round", 1)),
@@ -152,6 +198,7 @@ class TeachingState:
     def to_dict(self) -> dict:
         d: dict = {
             "status": self.status,
+            "mode": self.mode,
             "goal": self.goal,
             "last_question": self.last_question,
             "current_round": self.current_round,
@@ -277,11 +324,25 @@ def _save_teaching_state(base_dir: Path, state_file: str,
 
 # ── Prompt 組裝 ───────────────────────────────────────────────────
 
+def _is_state_fresh(ts: TeachingState, teaching_timeout: int) -> bool:
+    """判斷既有 teaching state 是否仍新鮮（未超過 timeout）。
+    超過視為失效，不應把 last_question 等帶入新訊息的 prompt。
+    """
+    if ts.last_sent_ts <= 0:
+        return False
+    return (time.time() - ts.last_sent_ts) <= teaching_timeout
+
+
 def _build_inbox_prompt(agent_name: str, system_context: str,
-                         message: str, ts: TeachingState) -> str:
+                         message: str, ts: TeachingState,
+                         teaching_timeout: int = TEACHING_TIMEOUT_SECONDS) -> str:
     ts_summary = ""
-    if ts.status in ("active", "waiting_reply"):
-        ts_summary = f"\n\n【教學目標】{ts.goal}\n【上一個問題】{ts.last_question}"
+    if (ts.status in ("active", "waiting_reply")
+            and _is_state_fresh(ts, teaching_timeout)):
+        if ts.mode == "discussion":
+            ts_summary = f"\n\n【上一輪你的發言】{ts.last_question}"
+        else:
+            ts_summary = f"\n\n【教學目標】{ts.goal}\n【上一個問題】{ts.last_question}"
 
     return f"""{system_context}{ts_summary}
 
@@ -292,9 +353,7 @@ def _build_inbox_prompt(agent_name: str, system_context: str,
 
 ---
 
-請用繁體中文回應。記住：引導思考，不替他解決問題。
-若這條訊息不需要回覆（如純報告、資訊分享），直接輸出字面值：{NO_REPLY}
-若需要人工判斷，輸出：{NEEDS_HUMAN}: [原因]"""
+請用繁體中文回應。"""
 
 
 def _build_teaching_prompt(agent_name: str, system_context: str,
@@ -317,14 +376,42 @@ def _build_teaching_prompt(agent_name: str, system_context: str,
 請用繁體中文回應。"""
 
 
+def _build_discussion_prompt(agent_name: str, system_context: str,
+                              reply_content: str, ts: TeachingState) -> str:
+    return f"""{system_context}
+
+【討論模式 — 第 {ts.current_round}/{ts.max_rounds} 輪】
+【上一輪你的發言】{ts.last_question}
+【{agent_name} 的回應】
+{reply_content}
+
+---
+
+請繼續討論。規則：
+- 平等對話 tone：可表達自己看法、同意、不同意、補充資訊、提反問
+- 不要強迫對方學習什麼，他不是在被教
+- 若話題自然結束（對方收尾、共識達成、無新內容可加），輸出字面值：{NO_REPLY}
+- 若內容涉及修改 Hang 的系統或道德邊界，輸出：{NEEDS_HUMAN}: [原因]
+請用繁體中文回應。"""
+
+
 # ── 主要邏輯：處理 inbox 訊息 ─────────────────────────────────────
 
+def _mark_processed(agent_state: AgentState, target: str) -> None:
+    """將 target 加入 processed_inbox，保留出現順序，並截斷至上限。
+    用 dict.fromkeys 去重保序（修 #2：set 順序不穩定）。
+    """
+    new_list = list(dict.fromkeys(agent_state.processed_inbox + [target]))
+    agent_state.processed_inbox = new_list[-MAX_PROCESSED_INBOX_HISTORY:]
+
+
 def _process_inbox(agent_name: str, agent_cfg: dict, transport,
-                   all_state: dict, cfg: dict, dry_run: bool, base_dir: Path) -> dict:
+                   all_state: dict, cfg: dict, dry_run: bool, base_dir: Path,
+                   teaching_timeout: int = TEACHING_TIMEOUT_SECONDS) -> dict:
     """處理 for-claude/ 新訊息。回傳更新後的 all_state。"""
     inbox_remote = agent_cfg.get("inbox_remote", "")
     outbox_remote = agent_cfg.get("outbox_remote", "")
-    cooldown = agent_cfg.get("cooldown_seconds", 600)
+    cooldown = agent_cfg.get("cooldown_seconds", DEFAULT_COOLDOWN_SECONDS)
     system_context = agent_cfg.get("system_context", "")
 
     agent_state = AgentState.from_dict(all_state.get(agent_name, {}))
@@ -348,26 +435,29 @@ def _process_inbox(agent_name: str, agent_cfg: dict, transport,
     content = transport.read_file(remote_path)
 
     if content is None:
-        append_log(base_dir / ERROR_LOG, f"[{agent_name}] 無法讀取 {remote_path}")
+        # 修 #1：讀失敗也 mark processed，避免無限 retry 同個壞檔
+        append_log(base_dir / ERROR_LOG,
+                   f"[{agent_name}] 無法讀取 {remote_path}（已 mark processed 跳過）")
+        _mark_processed(agent_state, target)
+        all_state[agent_name] = agent_state.to_dict()
         return all_state
 
     # 跳過 babysit 自己生成的訊息（防無限 loop）
-    if "generated_by: babysit" in content:
-        processed.add(target)
-        agent_state.processed_inbox = list(processed)
+    if BABYSIT_MARKER in content:
+        _mark_processed(agent_state, target)
         all_state[agent_name] = agent_state.to_dict()
         return all_state
 
     ts_file = agent_cfg.get("teaching_state_file", f"data/teaching_state/{agent_name}.json")
     teaching_state = _load_teaching_state(base_dir, ts_file)
-    prompt = _build_inbox_prompt(agent_name, system_context, content, teaching_state)
+    prompt = _build_inbox_prompt(agent_name, system_context, content,
+                                  teaching_state, teaching_timeout=teaching_timeout)
 
     print(f"[{agent_name}] 處理 inbox: {target}")
 
     if dry_run:
         print(f"[dry-run] prompt preview:\n{prompt[:DRY_RUN_PREVIEW_CHARS]}...")
-        processed.add(target)
-        agent_state.processed_inbox = list(processed)
+        _mark_processed(agent_state, target)
         all_state[agent_name] = agent_state.to_dict()
         return all_state
 
@@ -384,43 +474,70 @@ def _process_inbox(agent_name: str, agent_cfg: dict, transport,
                    f"[{agent_name}] {target} → {response.strip()[:120]}")
         print(f"⚠️  [{agent_name}] 需要人工介入：{response.strip()}")
     else:
+        # 解析 mode 標籤；剝除 MODE 行後再送 agent
+        mode = _parse_mode(response)
+        clean_response = _strip_mode_line(response)
+
         ts = int(time.time())
         filename = f"babysit_{ts}.txt"
-        content_to_send = f"generated_by: babysit-{ts}\n\n{response}"
+        content_to_send = f"{BABYSIT_MARKER}-{ts}\n\n{clean_response}"
         ok = transport.send_reply(content_to_send, outbox_remote, filename)
         if ok:
-            append_log(base_dir / LOG_FILE, f"[{agent_name}] 回應已送出 → {filename}")
+            append_log(base_dir / LOG_FILE,
+                       f"[{agent_name}] 回應已送出 → {filename} (mode={mode})")
             agent_state.last_reply_ts = float(ts)
-            # 送出後啟動 teaching loop：等 agent 從 claude-dialogues/ 回來
-            ts_file = agent_cfg.get("teaching_state_file",
-                                    f"data/teaching_state/{agent_name}.json")
-            teaching_state = _load_teaching_state(base_dir, ts_file)
-            if teaching_state.status not in ("active", "waiting_reply"):
-                teaching_state.status = "waiting_reply"
-                teaching_state.current_round = 1
-                teaching_state.completed_at = ""
-                teaching_state.completion_summary = ""
-                teaching_state.timeout_warning_ts = 0.0
-                teaching_state.last_sent_ts = float(ts)
-                teaching_state.last_question = response[:LAST_QUESTION_MAX_CHARS]
-                teaching_state.last_processed_dialogue = ""
-                _save_teaching_state(base_dir, ts_file, teaching_state, dry_run)
+            # 送出後啟動 conversation loop：等 agent 從 claude-dialogues/ 回來
+            # 每條新 inbox 都重新判斷 mode，不延續舊狀態
+            teaching_state.status = "waiting_reply"
+            teaching_state.mode = mode
+            teaching_state.current_round = 1
+            teaching_state.completed_at = ""
+            teaching_state.completion_summary = ""
+            teaching_state.timeout_warning_ts = 0.0
+            teaching_state.last_sent_ts = float(ts)
+            teaching_state.last_question = clean_response[:LAST_QUESTION_MAX_CHARS]
+            teaching_state.last_processed_dialogue = ""
+            _save_teaching_state(base_dir, ts_file, teaching_state, dry_run)
         else:
             append_log(base_dir / ERROR_LOG, f"[{agent_name}] SCP 失敗：{filename}")
             _write_dead_letter(base_dir, agent_name, outbox_remote, filename, content_to_send)
 
-    processed.add(target)
-    agent_state.processed_inbox = list(processed)[-MAX_PROCESSED_INBOX_HISTORY:]
+    _mark_processed(agent_state, target)
     all_state[agent_name] = agent_state.to_dict()
     return all_state
 
 
 # ── 主要邏輯：教學 loop ───────────────────────────────────────────
 
-def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
-                            cfg: dict, dry_run: bool, base_dir: Path,
-                            teaching_timeout: int = TEACHING_TIMEOUT_SECONDS) -> None:
-    """若 TEACHING_STATE 為 active/waiting_reply，查回應並送下一問。"""
+def _complete_conversation(teaching: TeachingState, base_dir: Path, ts_file: str,
+                            status: str, summary: str, dry_run: bool,
+                            agent_name: str, mode_label: str,
+                            latest_dialogue: str | None = None) -> None:
+    """統一處理 conversation 結束狀態：賦值 + 持久化 + log。
+
+    status: 通常是 "completed" 或 "idle"（idle 用於二次逾時自動結束）
+    latest_dialogue: 若提供，更新 last_processed_dialogue（只在收到 dialogue 後結束時用）
+    """
+    teaching.status = status
+    teaching.completed_at = datetime.now(timezone.utc).isoformat()
+    teaching.completion_summary = summary
+    if latest_dialogue is not None:
+        teaching.last_processed_dialogue = latest_dialogue
+    _save_teaching_state(base_dir, ts_file, teaching, dry_run)
+    append_log(base_dir / LOG_FILE,
+               f"[{agent_name}] {mode_label} loop: {summary}")
+
+
+def _process_conversation_loop(agent_name: str, agent_cfg: dict, transport,
+                                cfg: dict, dry_run: bool, base_dir: Path,
+                                teaching_timeout: int = TEACHING_TIMEOUT_SECONDS) -> None:
+    """若 conversation state 為 active/waiting_reply/timeout_warning，
+    查 dialogue 回應並送下一輪。
+
+    根據 state.mode 切換 prompt 模板：
+    - teaching: 蘇格拉底引導，目標達成輸出 GOAL_ACHIEVED
+    - discussion: 平等討論，話題結束輸出 NO_REPLY_NEEDED
+    """
     ts_file = agent_cfg.get("teaching_state_file", f"data/teaching_state/{agent_name}.json")
     teaching = _load_teaching_state(base_dir, ts_file)
 
@@ -430,6 +547,7 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
     dialogues_remote = agent_cfg.get("dialogues_remote", "")
     outbox_remote = agent_cfg.get("outbox_remote", "")
     system_context = agent_cfg.get("system_context", "")
+    mode_label = teaching.mode  # 'teaching' | 'discussion'
 
     dialogues = transport.list_dialogues(dialogues_remote)
     if not dialogues:
@@ -438,55 +556,70 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
     latest = dialogues[0]
     if latest == teaching.last_processed_dialogue:
         # 無新回應：逾時檢查
-        if (time.time() - teaching.last_sent_ts > teaching_timeout
-                and teaching.status != "timeout_warning"):
-            ts = int(time.time())
-            confirm_msg = (f"generated_by: babysit-{ts}\n\n"
-                           f"你好，我在等你回應我上一個問題，你有看到嗎？\n"
-                           f"（上一問：{teaching.last_question}）")
-            if not dry_run:
-                transport.send_reply(confirm_msg, outbox_remote, f"babysit_{ts}_confirm.txt")
-            teaching.status = "timeout_warning"
-            teaching.last_sent_ts = float(ts)
-            teaching.timeout_warning_ts = float(ts)
-            _save_teaching_state(base_dir, ts_file, teaching, dry_run)
-            append_log(base_dir / LOG_FILE, f"[{agent_name}] teaching loop: 逾時確認訊息已送")
+        elapsed = time.time() - teaching.last_sent_ts
+        if elapsed > teaching_timeout:
+            if teaching.status != "timeout_warning":
+                # 第一次逾時：送 confirm 訊息
+                ts = int(time.time())
+                confirm_msg = (f"{BABYSIT_MARKER}-{ts}\n\n"
+                               f"你好，我在等你回應我上一個訊息，你有看到嗎？\n"
+                               f"（上一輪：{teaching.last_question}）")
+                if not dry_run:
+                    transport.send_reply(confirm_msg, outbox_remote,
+                                          f"babysit_{ts}_confirm.txt")
+                teaching.status = "timeout_warning"
+                teaching.last_sent_ts = float(ts)
+                teaching.timeout_warning_ts = float(ts)
+                _save_teaching_state(base_dir, ts_file, teaching, dry_run)
+                append_log(base_dir / LOG_FILE,
+                           f"[{agent_name}] {mode_label} loop: 逾時確認訊息已送")
+            elif (teaching.timeout_warning_ts > 0
+                    and time.time() - teaching.timeout_warning_ts > teaching_timeout):
+                # 修 #5：第二次逾時仍無回應 → 結束 conversation
+                _complete_conversation(teaching, base_dir, ts_file,
+                                        "idle", "二次逾時無回應，自動結束",
+                                        dry_run, agent_name, mode_label)
         return
 
     reply_content = transport.read_dialogue(dialogues_remote, latest)
     if not reply_content:
         return
 
-    print(f"[{agent_name}] teaching loop: 新回應 {latest}")
+    print(f"[{agent_name}] {mode_label} loop: 新回應 {latest}")
 
     if teaching.current_round >= teaching.max_rounds:
-        teaching.status = "completed"
-        teaching.completed_at = datetime.now(timezone.utc).isoformat()
-        teaching.completion_summary = "達到最大輪次上限"
-        _save_teaching_state(base_dir, ts_file, teaching, dry_run)
-        append_log(base_dir / LOG_FILE, f"[{agent_name}] teaching loop: 達到最大輪次，結束")
+        _complete_conversation(teaching, base_dir, ts_file,
+                                "completed", "達到最大輪次上限",
+                                dry_run, agent_name, mode_label,
+                                latest_dialogue=latest)
         return
 
-    prompt = _build_teaching_prompt(agent_name, system_context, reply_content, teaching)
+    if mode_label == "discussion":
+        prompt = _build_discussion_prompt(agent_name, system_context, reply_content, teaching)
+    else:
+        prompt = _build_teaching_prompt(agent_name, system_context, reply_content, teaching)
 
     if dry_run:
-        print(f"[dry-run] teaching prompt preview:\n{prompt[:DRY_RUN_PREVIEW_CHARS]}...")
+        print(f"[dry-run] {mode_label} prompt preview:\n{prompt[:DRY_RUN_PREVIEW_CHARS]}...")
         return
 
     response = run_claude(prompt, cfg)
     if response is None:
-        append_log(base_dir / ERROR_LOG, f"[{agent_name}] teaching loop: claude -p 失敗")
+        append_log(base_dir / ERROR_LOG,
+                   f"[{agent_name}] {mode_label} loop: claude -p 失敗")
         return
 
     sentinel = _parse_sentinel(response)
-    if sentinel == "goal_achieved":
-        teaching.status = "completed"
-        teaching.completed_at = datetime.now(timezone.utc).isoformat()
-        teaching.completion_summary = "目標達成"
-        teaching.last_processed_dialogue = latest
-        _save_teaching_state(base_dir, ts_file, teaching, dry_run)
-        append_log(base_dir / LOG_FILE, f"[{agent_name}] teaching loop: 目標達成，結束")
-        print(f"🎓 [{agent_name}] 教學目標達成！")
+
+    # teaching: GOAL_ACHIEVED 結束；discussion: NO_REPLY_NEEDED 結束
+    if (mode_label == "teaching" and sentinel == "goal_achieved") or \
+       (mode_label == "discussion" and sentinel == "no_reply"):
+        summary = "目標達成" if mode_label == "teaching" else "話題自然結束"
+        _complete_conversation(teaching, base_dir, ts_file,
+                                "completed", summary,
+                                dry_run, agent_name, mode_label,
+                                latest_dialogue=latest)
+        print(f"🎓 [{agent_name}] {mode_label} conversation 結束！")
         return
 
     if sentinel == "needs_human":
@@ -494,12 +627,12 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
         teaching.last_processed_dialogue = latest
         _save_teaching_state(base_dir, ts_file, teaching, dry_run)
         append_log(base_dir / LOG_FILE,
-                   f"[{agent_name}] teaching loop: 需人工介入 → {response.strip()[:120]}")
-        print(f"⚠️  [{agent_name}] 教學 loop 需要人工介入：{response.strip()}")
+                   f"[{agent_name}] {mode_label} loop: 需人工介入 → {response.strip()[:120]}")
+        print(f"⚠️  [{agent_name}] {mode_label} loop 需要人工介入：{response.strip()}")
         return
 
     ts = int(time.time())
-    filename = f"babysit_{ts}_teach.txt"
+    filename = f"babysit_{ts}_{mode_label}.txt"
     content_to_send = f"generated_by: babysit-{ts}\n\n{response}"
     ok = transport.send_reply(content_to_send, outbox_remote, filename)
     if ok:
@@ -508,11 +641,12 @@ def _process_teaching_loop(agent_name: str, agent_cfg: dict, transport,
         teaching.last_processed_dialogue = latest
         teaching.last_question = response[:LAST_QUESTION_MAX_CHARS]
         teaching.status = "waiting_reply"
+        teaching.timeout_warning_ts = 0.0  # 收到回應重置 timeout warning
         _save_teaching_state(base_dir, ts_file, teaching, dry_run)
         append_log(base_dir / LOG_FILE,
-                   f"[{agent_name}] teaching loop: Round {teaching.current_round} 送出")
+                   f"[{agent_name}] {mode_label} loop: Round {teaching.current_round} 送出")
     else:
-        append_log(base_dir / ERROR_LOG, f"[{agent_name}] teaching loop: SCP 失敗")
+        append_log(base_dir / ERROR_LOG, f"[{agent_name}] {mode_label} loop: SCP 失敗")
         _write_dead_letter(base_dir, agent_name, outbox_remote, filename, content_to_send)
 
 
@@ -544,8 +678,9 @@ def _do_babysit_work(enabled_agents: dict, cfg: dict, dry_run: bool,
         all_state = _process_inbox(
             agent_name, agent_cfg, transport,
             all_state, cfg, dry_run, base_dir,
+            teaching_timeout=teaching_timeout,
         )
-        _process_teaching_loop(
+        _process_conversation_loop(
             agent_name, agent_cfg, transport,
             cfg, dry_run, base_dir,
             teaching_timeout=teaching_timeout,
