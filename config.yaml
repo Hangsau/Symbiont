@@ -43,6 +43,8 @@ paths:
   state_file: "data/state.json"
   pending_evolve: "data/pending_evolve.txt"
   pending_audit: "data/pending_audit.txt"
+  pending_session_wrap: "data/pending_session_wrap.txt"
+  session_wrap_state: "data/session_wrap_state.json"
   error_log: "data/error.log"
   audit_log: "data/audit.log"
 
@@ -77,6 +79,15 @@ memory_audit:
   thoughts_archive_threshold: 30   # thoughts/ 超過此數量 → 最舊 10 條移至 archive
   memory_index_warn_lines: 170     # MEMORY.md 超過此行數 → 輸出警告
   audit_cooldown_hours: 24         # run_audit.py 兩次跑之間最短間隔（小時）；0 = 永遠跑（debug）
+
+session_wrap:
+  # 自動補跑 /wrap 的 Step 0 (Memory Audit) + Step 2 (Reflect)
+  # 使用者忘記跑 /wrap 時，由 Stop hook + Task Scheduler 自動執行
+  enabled: true                    # false = 停用整個自動化
+  auto_write: true                 # true = 直接寫 memory/；false = dry-run 模式不寫檔
+  confidence_threshold: 0.8        # < 此分數的 candidate 直接丟棄
+  ctx_cap_chars: 8000              # 傳給 LLM 的 MEMORY.md 內容上限
+  skip_if_wrap_done: true          # ~/.claude/.wrap_done.txt 15 分鐘內存在 → 跳過（避免與手動 /wrap 撞）
 
 evolve:
   distill_threshold: 25            # existing rules + new rules >= 此數觸發蒸餾；0 = 停用
