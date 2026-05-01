@@ -38,11 +38,12 @@ Symbiont/
 │   ├── memory.lock         # 自動建立：memory_audit / synthesize 共用鎖
 │   ├── babysit.lock        # 自動建立：babysit 並發保護
 │   ├── heartbeat.json      # babysit 每次執行寫入：last_run_ts + agents_pinged（healthz 讀）
+│   ├── last_audit_ts.txt   # run_audit.py 寫入：上次 memory_audit 成功的 timestamp（cooldown 用）
 │   └── agents.yaml         # agent registry（gitignore，從 agents.example.yaml 複製）
 ├── scripts/
 │   ├── trigger-evolve.py      # Stop hook：寫三個 pending .txt 旗標，純檔案操作
 │   ├── run_evolve.py          # Task Scheduler wrapper：每 1 分鐘 poll pending_evolve.txt，有才跑 evolve.py
-│   ├── run_audit.py           # Task Scheduler wrapper：每日 04:00 無條件跑 memory_audit.py
+│   ├── run_audit.py           # Task Scheduler wrapper：每小時觸發，內部 24h cooldown 控制實際跑頻率
 │   ├── run_babysit.py         # Task Scheduler wrapper：每 2 分鐘執行 babysit.py
 │   └── symbiont-stop-hook.sh  # Stop hook 腳本（Mac/Linux 安裝用）
 ├── vm-bootstrap/
@@ -61,7 +62,7 @@ Symbiont/
 |------|------|------|------|
 | `evolve.py` | 最新 .jsonl session log | CLAUDE.md 規則更新、evolution_log append | Stop hook 寫 pending_evolve.txt → `scripts/run_evolve.py`（pythonw.exe）每 1 分鐘 poll；每 10 次後觸發 synthesize.py |
 | `synthesize.py` | 最近 N 個 session 的 friction + habit 片段 + 現有 skill descriptions | `~/.claude/skills/` 新建或迭代 skill（quality_score < 2 跳過）、memory/thoughts/ 洞見、knowledge/<type>/ 蒸餾知識、低使用率 skill 清掃 | 由 evolve.py 計數觸發（每 10 次 session） |
-| `memory_audit.py` | memory/*.md 的 review_by 欄位 | archive 移動、MEMORY.md 更新 | 每日 04:00（`scripts/run_audit.py`，pythonw.exe，無條件執行） |
+| `memory_audit.py` | memory/*.md 的 review_by 欄位 | archive 移動、MEMORY.md 更新；`data/last_audit_ts.txt` | 每小時觸發（`scripts/run_audit.py`，pythonw.exe）；wrapper 內部 24h cooldown 控制實際跑頻率（可在 `config.yaml` 改 `audit_cooldown_hours`），筆電/出差/Sleep 用戶開機後 1 小時內必補跑 |
 | `babysit.py` | for-claude/<agent>/ 新訊息 | claude-inbox/<agent>/ 回應；data/heartbeat.json | 每 2 分鐘（`scripts/run_babysit.py`，pythonw.exe）。LLM 第一行輸出 `MODE: teaching\|discussion` 標籤決定後續對話模式 |
 | `healthz.py` | data/heartbeat.json | stdout 健康報告 + exit code 0/1 | 手動 CLI（`python src/healthz.py [--max-age N] [--allow-partial] [--json]`） |
 

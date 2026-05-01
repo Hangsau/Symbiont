@@ -228,9 +228,13 @@ python src/healthz.py --allow-partial  # 部分 agent SSH fail 仍視為健康
    Get-ScheduledTask -TaskName "symbiont-memory-audit" | Get-ScheduledTaskInfo |
      Format-List LastRunTime, NextRunTime, LastTaskResult
    ```
-   任務每日 04:00 無條件執行 `scripts/run_audit.py` → `memory_audit.py`。
-   （原 ONLOGON trigger 在 Win11 fast startup 下幾乎永不觸發，已改 DAILY）
+   任務每小時觸發 `scripts/run_audit.py`，wrapper 內部 24h cooldown 控制實際執行。
+   - 跳過：距上次跑 < 24h → `sys.exit 0`，audit_hook.log 無新紀錄
+   - 執行：first run / 過 24h / `data/last_audit_ts.txt` 損壞或時鐘倒退 → 跑 `memory_audit.py` 並更新 ts
+   - 調整 cooldown：改 `config.yaml` 的 `memory_audit.audit_cooldown_hours`（0 = 永遠跑，debug 用）
+   - 為何不用固定時間（如 DAILY 04:00）：對筆電/出差/Sleep 用戶不可靠；HOURLY + cooldown 確保開機後 1 小時內補跑
 3. 驗證：`python src/memory_audit.py --dry-run`
+4. 強制立即跑一次（忽略 cooldown）：`python src/memory_audit.py`（直接呼叫，繞過 wrapper）
 
 ---
 

@@ -76,6 +76,7 @@ memory_audit:
   auto_archive: true               # false = 只報告不移動任何檔案
   thoughts_archive_threshold: 30   # thoughts/ 超過此數量 → 最舊 10 條移至 archive
   memory_index_warn_lines: 170     # MEMORY.md 超過此行數 → 輸出警告
+  audit_cooldown_hours: 24         # run_audit.py 兩次跑之間最短間隔（小時）；0 = 永遠跑（debug）
 
 evolve:
   distill_threshold: 25            # existing rules + new rules >= 此數觸發蒸餾；0 = 停用

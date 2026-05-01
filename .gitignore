@@ -11,6 +11,7 @@ data/synth_state.lock
 data/distill_backup.json
 data/evolution_log.md
 data/heartbeat.json
+data/last_audit_ts.txt
 data/*.pre_v2_backup
 
 # agents.yaml 含個人 SSH/IP 設定，用範例檔取代

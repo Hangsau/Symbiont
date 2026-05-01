@@ -316,7 +316,7 @@ Symbiont/
 ├── scripts/
 │   ├── trigger-evolve.py      # Stop hook: writes pending flag files only (no subprocess)
 │   ├── run_evolve.py          # Task Scheduler wrapper: polls pending_evolve.txt every 1 min (pythonw.exe, no window)
-│   ├── run_audit.py           # Task Scheduler wrapper: runs memory_audit.py daily at 04:00 (pythonw.exe, no window)
+│   ├── run_audit.py           # Task Scheduler wrapper: hourly trigger + internal 24h cooldown (pythonw.exe, no window)
 │   ├── run_babysit.py         # Task Scheduler wrapper: runs babysit.py every 2 min (pythonw.exe, no window)
 │   └── symbiont-stop-hook.sh  # Stop hook script for Mac/Linux (copied to ~/.claude/scripts/ on install)
 ├── setup/
@@ -384,10 +384,16 @@ Every 1 minute (Task Scheduler — Windows only):
         └── scripts/run_evolve.py (via pythonw.exe, no window)
                 └── pending_evolve.txt exists → run evolve.py → delete pending
 
-Daily at 04:00 (Task Scheduler — memory audit):
-        └── unconditionally run memory_audit.py
-            (Original ONLOGON trigger never fired under Win11 fast startup;
-             pending_audit.txt is still written by the Stop hook but no longer gates execution)
+Hourly (Task Scheduler — memory audit):
+        └── scripts/run_audit.py
+                ├── Reads data/last_audit_ts.txt
+                ├── If now - last_run < cooldown_hours (default 24) → sys.exit 0
+                └── Else → run memory_audit.py, write last_audit_ts.txt on success
+            (Why hourly + cooldown instead of fixed-time DAILY:
+             laptops/travelers/sleep users may not be on at any given hour;
+             hourly trigger guarantees execution within 1h after boot,
+             cooldown prevents wasted work. Configurable via
+             memory_audit.audit_cooldown_hours in config.yaml; set 0 to always run.)
 
 Every 2 minutes (Task Scheduler):
         └── run babysit.py
