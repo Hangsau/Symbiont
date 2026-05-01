@@ -8,19 +8,14 @@
 
 - **存在** → 讀取檔案內容，提取各個 token/key 值
 - **不存在** → 逐一詢問用戶，需要以下欄位：
-  - `OPENAI_API_KEY`（LLM provider 的 API key，Groq 用 `gsk_` 開頭）
-  - `OPENAI_BASE_URL`（Provider endpoint，Groq：`https://api.groq.com/openai/v1`）
-  - `HERMES_INFERENCE_PROVIDER`（固定填 `custom`）
-  - `HERMES_INFERENCE_MODEL`（模型名稱，Groq：`llama-3.3-70b-versatile`）
-  - `OPENROUTER_API_KEY`（OpenRouter key，fallback 用）
+  - `OPENROUTER_API_KEY`（OpenRouter key，`sk-or-v1-` 開頭）
   - `TELEGRAM_BOT_TOKEN`（Telegram Bot token，@BotFather 取得）
-  - `TELEGRAM_ALLOWED_USERS`（你的 Telegram User ID）
-  - `GEMINI_API_KEY`（Google Gemini API key，fallback 用）
+  - `TELEGRAM_ALLOWED_USERS`（你的 Telegram User ID，純整數）
 
 讀取方式：
 ```bash
 source ~/secrets.env
-echo "OPENAI_API_KEY: ${OPENAI_API_KEY:0:8}..."
+echo "OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:0:12}..."
 ```
 若欄位仍為空，需手動確認 secrets.env 格式（每行 `KEY=VALUE`，注釋必須在獨立行）。
 
@@ -32,25 +27,23 @@ curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scri
 ```
 
 安裝完成後：
-1. 設定 PATH：`export PATH="$HOME/.local/bin:$PATH"`
-2. 驗證 binary 存在：`which hermes`
+1. 設定 PATH：`export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"`
+2. 驗證 binary 存在：`hermes --version`
 3. **TTY warning 是正常的**（`/dev/tty: No such device or address`），不是錯誤，忽略即可。
 
 ## Step 3：寫入設定檔
 
 ### 3a. 寫入 `~/.hermes/.env`
 
-根據 Step 1 取得的值，建立 `~/.hermes/.env` 檔案，內容格式如下：
+根據 Step 1 取得的值，建立 `~/.hermes/.env` 檔案，只需三個欄位：
+
 ```env
-OPENAI_API_KEY=<Step 1 取得的值>
-OPENAI_BASE_URL=<Step 1 取得的值>
-HERMES_INFERENCE_PROVIDER=custom
-HERMES_INFERENCE_MODEL=<Step 1 取得的值>
 OPENROUTER_API_KEY=<Step 1 取得的值>
 TELEGRAM_BOT_TOKEN=<Step 1 取得的值>
 TELEGRAM_ALLOWED_USERS=<Step 1 取得的值>
-GEMINI_API_KEY=<Step 1 取得的值>
 ```
+
+**重要**：不要加 `HERMES_INFERENCE_PROVIDER`、`HERMES_INFERENCE_MODEL`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`。model 設定放在 config.yaml，不是 .env。
 
 驗證寫入成功：
 ```bash
@@ -59,22 +52,28 @@ cat ~/.hermes/.env
 
 ### 3b. 寫入 `~/.hermes/config.yaml`
 
-建立 `~/.hermes/config.yaml`，將 `TELEGRAM_ALLOWED_USERS` 的值填入（純整數，不加引號）：
+將 `TELEGRAM_ALLOWED_USERS` 的值填入（純整數，不加引號）：
+
 ```yaml
 model:
+  provider: openrouter
+  default: meta-llama/llama-3.3-70b-instruct:free
   context_length: 131072
 
 fallback_providers:
   - model: meta-llama/llama-3.3-70b-instruct:free
     provider: openrouter
-  - model: gemini-2.0-flash
-    provider: gemini
 
 telegram:
   allowed_users: <TELEGRAM_ALLOWED_USERS 的數字值，純整數>
   enabled: true
 ```
-注意：`allowed_users` 必須是整數，不要加引號。
+
+**重要**：
+- `model.provider: openrouter` 讓 hermes 讀取 `OPENROUTER_API_KEY`
+- `model.default` 是 model ID，使用 `vendor/model-id:free` 格式
+- `context_length: 131072` 必須 ≥ 64000，否則 hermes 啟動失敗
+- `allowed_users` 必須是整數，不要加引號
 
 驗證寫入成功：
 ```bash
@@ -85,7 +84,7 @@ cat ~/.hermes/config.yaml
 
 執行啟動命令：
 ```bash
-~/.local/bin/hermes gateway run
+/usr/local/bin/hermes gateway run
 ```
 
 **注意：** hermes gateway 會自動背景執行，命令行會立刻返回。
@@ -109,9 +108,19 @@ cat ~/.hermes/gateway_state.json
 如果看到以上兩行，表示安裝成功。輸出完整的 `gateway_state.json` 內容作為驗收報告。
 
 **失敗情況：**
-- 如果 `gateway_state` 不是 `running` → 查看完整 JSON，輸出錯誤信息
-- 如果 `telegram.state` 不是 `connected` → 檢查 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_ALLOWED_USERS` 是否正確
-- 如果文件不存在 → hermes 啟動失敗，需要檢查 `~/.hermes/.env` 和 `config.yaml` 是否正確
+- `context window below minimum 64,000` → `config.yaml` 的 `context_length` 太小，改成 `131072`
+- `No models provided` → model 被設在 `.env` 的 `HERMES_INFERENCE_MODEL`，改成放在 `config.yaml` 的 `model.default`
+- `OpenRouter credential pool has no usable entries` → `~/.hermes/auth.json` 裡 openrouter 的 `last_status` 被錯誤標記，用 python3 清掉：
+  ```bash
+  python3 -c "
+  import json
+  with open('/root/.hermes/auth.json') as f: d=json.load(f)
+  for c in d['credential_pool'].get('openrouter',[]): c['last_status']=None; c['last_error_code']=None; c['last_error_message']=None
+  with open('/root/.hermes/auth.json','w') as f: json.dump(d,f,indent=2)
+  print('fixed')
+  "
+  ```
+- `telegram.state` 不是 `connected` → 檢查 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_ALLOWED_USERS` 是否正確
 
 ## 最終報告
 
