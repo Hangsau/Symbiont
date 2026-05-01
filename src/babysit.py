@@ -2,8 +2,11 @@
 babysit.py — 自動化 Claude↔Agent 協作層
 
 功能：
-  1. 掃描 for-claude/ 新訊息（agent 主動發起）→ 生引導回應 → 送回 claude-inbox/
-  2. 追蹤 TEACHING_STATE（Claude 主動教學 loop）→ 評估回應 → 送下一問
+  1. 掃描 for-claude/ 新訊息（agent 主動發起）→ 判斷 mode（teaching/discussion）
+     → 生回應 → 送回 claude-inbox/
+  2. Conversation loop（依 state.mode 切 prompt 模板）→ 評估 dialogue 回應
+     → 送下一輪。teaching 走蘇格拉底引導（GOAL_ACHIEVED 結束），
+     discussion 走平等對話（NO_REPLY_NEEDED 結束）
 
 觸發方式：
   - Task Scheduler 每 2 分鐘
@@ -633,7 +636,7 @@ def _process_conversation_loop(agent_name: str, agent_cfg: dict, transport,
 
     ts = int(time.time())
     filename = f"babysit_{ts}_{mode_label}.txt"
-    content_to_send = f"generated_by: babysit-{ts}\n\n{response}"
+    content_to_send = f"{BABYSIT_MARKER}-{ts}\n\n{response}"
     ok = transport.send_reply(content_to_send, outbox_remote, filename)
     if ok:
         teaching.current_round += 1
