@@ -45,9 +45,10 @@ TELEGRAM_ALLOWED_USERS=<Step 1 取得的值>
 
 **重要**：不要加 `HERMES_INFERENCE_PROVIDER`、`HERMES_INFERENCE_MODEL`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`。model 設定放在 config.yaml，不是 .env。
 
-驗證寫入成功：
+驗證寫入成功，然後立刻刪除暫存 secrets：
 ```bash
 cat ~/.hermes/.env
+rm ~/secrets.env && echo "secrets.env deleted"
 ```
 
 ### 3b. 寫入 `~/.hermes/config.yaml`
