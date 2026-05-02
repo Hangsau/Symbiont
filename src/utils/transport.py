@@ -46,17 +46,24 @@ def _quote_remote_path(p: str) -> str:
 class SSHTransport:
     """遠端 SSH agent transport。"""
 
-    def __init__(self, ssh_key: str, ssh_host: str):
+    def __init__(self, ssh_key: str, ssh_host: str, ssh_port: int | None = None):
         self.key = str(Path(ssh_key).expanduser())
         self.host = ssh_host
+        self.port = ssh_port
+
+    def _ssh_base_args(self) -> list[str]:
+        args = ["ssh", "-i", self.key,
+                "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
+                "-o", "BatchMode=yes"]
+        if self.port:
+            args += ["-p", str(self.port)]
+        args.append(self.host)
+        return args
 
     def _ssh(self, cmd: str, timeout: int = SSH_TIMEOUT_SECONDS) -> tuple[bool, str]:
         try:
             r = subprocess.run(
-                ["ssh", "-i", self.key,
-                 "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
-                 "-o", "BatchMode=yes",
-                 self.host, cmd],
+                self._ssh_base_args() + [cmd],
                 capture_output=True, text=True, timeout=timeout,
                 encoding="utf-8", errors="replace",
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
@@ -70,9 +77,12 @@ class SSHTransport:
     def _scp_to(self, local_path: Path, remote_path: str,
                 timeout: int = SCP_TIMEOUT_SECONDS) -> bool:
         try:
+            scp_args = ["scp", "-i", self.key, "-o", "BatchMode=yes"]
+            if self.port:
+                scp_args += ["-P", str(self.port)]
+            scp_args += [str(local_path), f"{self.host}:{remote_path}"]
             r = subprocess.run(
-                ["scp", "-i", self.key, "-o", "BatchMode=yes",
-                 str(local_path), f"{self.host}:{remote_path}"],
+                scp_args,
                 capture_output=True, timeout=timeout,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
@@ -174,6 +184,7 @@ def make_transport(agent_cfg: dict) -> SSHTransport | LocalTransport:
         return SSHTransport(
             ssh_key=agent_cfg["ssh_key"],
             ssh_host=agent_cfg["ssh_host"],
+            ssh_port=agent_cfg.get("ssh_port"),
         )
     if t == "local":
         return LocalTransport(

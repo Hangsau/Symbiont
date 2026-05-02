@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Hermes Agent VM bootstrap：用 claude -p 自動安裝並啟動 Hermes agent
 #
-# 使用方式：bash run.sh
+# 使用方式（在 VM 上執行）：bash run.sh
+#
+# 本機觸發方式：
+#   macOS / Linux：
+#     ssh user@your-vm "bash ~/run.sh"
+#   Windows PowerShell / Git Bash：
+#     ssh user@your-vm "bash ~/run.sh"
+#   （run.sh 本身在 VM 上跑，本機只需能 SSH 即可）
 #
 # 前置條件：
 #   1. ~/.claude/.credentials.json 已存在（從本機 SCP）

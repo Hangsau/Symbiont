@@ -1,6 +1,64 @@
 # Hermes Agent VM Bootstrap
 
-你正在一台 Arch Linux VM 上設置 Hermes AI agent。照以下步驟執行，每步完成後確認結果再繼續。
+你正在一台 Linux VM 上設置 Hermes AI agent。照以下步驟執行，每步完成後確認結果再繼續。
+
+> 本文件適用於任何主流 Linux 發行版（Ubuntu/Debian、Arch、Fedora 等）。指令中如有套件管理器（pacman/apt/dnf）請依你的系統替換。
+
+---
+
+## 前置條件（執行 run.sh 之前，由本機 Claude Code 完成）
+
+以下步驟需要在 **本機**（非 VM 內）執行，由使用者的本地 Claude Code session 操作。
+
+> **本機 OS 相容性**
+> - **macOS**：所有指令可直接在 Terminal 執行
+> - **Windows**：`ssh` / `scp` 在 PowerShell（Win10+）可直接使用；若遇到 `~` 路徑問題，改用 `$HOME` 或完整路徑（如 `C:\Users\你的帳號\.claude\`）
+> - **Linux**：與 macOS 相同，直接執行
+
+### A. 在 VM 上安裝 Node.js 與 Claude Code
+
+```bash
+# SSH 進 VM
+ssh user@your-vm
+
+# 安裝 Node.js + npm（依你的發行版選擇）
+pacman -S --noconfirm nodejs npm   # Arch Linux
+# apt install -y nodejs npm        # Ubuntu / Debian
+# dnf install -y nodejs npm        # Fedora / RHEL
+
+# 安裝 Claude Code
+npm install -g @anthropic-ai/claude-code
+
+# 確認
+claude --version
+```
+
+### B. 將 credentials 複製到 VM
+
+Claude Code 需要認證才能執行 `claude -p`。將本機的 credentials 複製到 VM：
+
+```bash
+# macOS / Linux / Windows PowerShell（將 user@your-vm 換成你的 VM）
+ssh user@your-vm "mkdir -p ~/.claude"
+scp ~/.claude/.credentials.json user@your-vm:~/.claude/.credentials.json
+
+# Windows CMD（若 ~ 無法展開）
+# scp %USERPROFILE%\.claude\.credentials.json user@your-vm:~/.claude/.credentials.json
+```
+
+> credentials.json 是你的 Claude Code 登入 token，複製即完成驗證，不需要在 VM 上重新登入。
+
+### C. 準備 secrets.env
+
+將 `secrets.example.env` 複製為 `~/secrets.env`（在 VM 上），填入真實值：
+
+```
+OPENROUTER_API_KEY=sk-or-v1-...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_ALLOWED_USERS=...
+```
+
+---
 
 ## Step 1：讀取 secrets
 
@@ -114,10 +172,11 @@ cat ~/.hermes/gateway_state.json
 - `OpenRouter credential pool has no usable entries` → `~/.hermes/auth.json` 裡 openrouter 的 `last_status` 被錯誤標記，用 python3 清掉：
   ```bash
   python3 -c "
-  import json
-  with open('/root/.hermes/auth.json') as f: d=json.load(f)
+  import json, os
+  p = os.path.expanduser('~/.hermes/auth.json')
+  with open(p) as f: d=json.load(f)
   for c in d['credential_pool'].get('openrouter',[]): c['last_status']=None; c['last_error_code']=None; c['last_error_message']=None
-  with open('/root/.hermes/auth.json','w') as f: json.dump(d,f,indent=2)
+  with open(p,'w') as f: json.dump(d,f,indent=2)
   print('fixed')
   "
   ```
@@ -134,6 +193,51 @@ cat ~/.hermes/gateway_state.json
 
 ---
 
+## Step 5b：設定 hermes gateway 開機自動啟動
+
+建立 systemd service，確保 VM 重開後 gateway 自動恢復：
+
+```bash
+# 取得目前用戶名
+HERMES_USER=$(whoami)
+
+cat > /etc/systemd/system/hermes-gateway.service << EOF
+[Unit]
+Description=Hermes Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=${HERMES_USER}
+ExecStart=/usr/local/bin/hermes gateway run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+停掉目前手動啟動的 gateway，交給 systemd 管理：
+
+```bash
+pkill -f "hermes gateway" 2>/dev/null || true
+sleep 2
+systemctl daemon-reload
+systemctl enable hermes-gateway.service
+systemctl start hermes-gateway.service
+sleep 8
+systemctl is-active hermes-gateway.service
+```
+
+**成功條件：** `active` ✓
+
+> `hermes gateway run` 是前台進程，`Type=simple` 正確。不要加 `--replace`（無現有 gateway 時會 exit 1）。
+
+**失敗排查：** `journalctl -u hermes-gateway -n 20`
+
+---
+
 ## Step 6：建立 babysit Channel（VM 端）
 
 此步驟在 VM 上執行，建立讓 Symbiont babysit 能與這台 agent 雙向通訊的基礎設施。
@@ -141,7 +245,9 @@ cat ~/.hermes/gateway_state.json
 ### 6a. 安裝依賴
 
 ```bash
-pacman -S --noconfirm inotify-tools
+pacman -S --noconfirm inotify-tools   # Arch Linux
+# apt install -y inotify-tools        # Ubuntu / Debian
+# dnf install -y inotify-tools        # Fedora / RHEL
 ```
 
 ### 6b. 建立目錄
@@ -286,20 +392,25 @@ print(f"Wrote {out}")
 
 建立 `/etc/systemd/system/hermes-inbox-watcher.service`，內容如下：
 
-```ini
+```bash
+HERMES_USER=$(whoami)
+HERMES_HOME=$(eval echo ~${HERMES_USER})
+
+cat > /etc/systemd/system/hermes-inbox-watcher.service << EOF
 [Unit]
 Description=Hermes Claude Inbox Watcher
 After=network.target
 
 [Service]
 Type=simple
-User=root
-ExecStart=/root/scripts/inbox-watcher.sh
+User=${HERMES_USER}
+ExecStart=${HERMES_HOME}/scripts/inbox-watcher.sh
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
+EOF
 ```
 
 ### 6f. 啟用並啟動
@@ -322,7 +433,7 @@ systemctl status hermes-inbox-watcher.service
 
 ## Step 7（選用）：接上 Symbiont babysit（本機端）
 
-> 此步驟在**本機 Windows 的 Symbiont 目錄**執行，不在 VM 上。
+> 此步驟在**本機的 Symbiont 目錄**執行，不在 VM 上。
 
 Hermes Gateway 起來後，如果要讓本機 Symbiont 的 `babysit.py` 自動回應這台 VM agent 的訊息，需要在 `data/agents.yaml` 加入以下條目（從 `data/agents.example.yaml` 複製後修改）：
 
@@ -361,6 +472,16 @@ agents:
 - `babysit.py` 讀取方向：`for-claude/archive/` → Claude → `claude-inbox/`（Hermes Gateway 自動監聽）
 - `inbox_remote` 根目錄（`for-claude/`）永遠是空的，訊息進來會被即時歸檔到 `archive/`
 - `ssh_port` 欄位為非標準 port 專用，標準 port 22 可省略
+
+**本機排程設定：**
+
+- **Windows**：Symbiont 已透過 Task Scheduler 每 2 分鐘自動執行 `babysit.py`，無需額外設定
+- **macOS / Linux**：手動加入 crontab：
+  ```bash
+  crontab -e
+  # 加入以下一行（將路徑替換為你的 Symbiont 目錄）
+  */2 * * * * cd /path/to/Symbiont && python src/babysit.py >> /tmp/babysit.log 2>&1
+  ```
 
 **端到端驗收：**
 ```bash
