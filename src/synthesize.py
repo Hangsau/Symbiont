@@ -315,7 +315,7 @@ SYNTHESIS_PROMPT = """\
   "memories": [
     {{
       "filename": "feedback_xxx.md",
-      "content": "---\\nname: xxx\\ndescription: xxx\\ntype: feedback\\ncreated: {today}\\nvalid_until: null\\nsuperseded_by: null\\n---\\n\\n記憶內容..."
+      "content": "---\\nname: xxx\\ndescription: xxx\\ntype: feedback\\ncreated: {today}\\nvalid_until: null\\nsuperseded_by: null\\nconcepts: [kebab-concept-1, kebab-concept-2]\\n---\\n\\n記憶內容..."
     }}
   ],
   "synthesis_summary": "一句話描述本次 synthesis 的主要發現"

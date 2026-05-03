@@ -86,6 +86,7 @@ PROMPT_TEMPLATE = """\
       "description": "一行索引描述（≤150 字，用於判斷相關性）",
       "filename": "feedback_xxx.md（全小寫 kebab-case，依現有命名慣例，字元限 a-z 0-9 _）",
       "content": "完整檔案 body（純 markdown，不含 frontmatter，模組會自動加）",
+      "concepts": ["kebab-case-concept-1", "kebab-case-concept-2"],
       "confidence": 0.0,
       "existing_match": null
     }}
@@ -104,6 +105,7 @@ PROMPT_TEMPLATE = """\
 ```
 
 **type 只能是**：`feedback`、`project`、`reference`（三選一）。
+**concepts**：2–5 個 kebab-case 語意標籤，供語意搜尋用；無法判斷填空陣列 `[]`。
 **existing_match**：若疑似重複，填現有記憶的檔名（如 `feedback_xxx.md`）；確定不重複填 `null`。
 **insight 三個 Q 全無實質答案** → 整個 `insight` 欄位改為 `null`（不是物件，是 JSON null）。
 **memory_candidates 無候選** → 填空陣列 `[]`。
@@ -282,6 +284,13 @@ def _extract_json(raw: str) -> dict | None:
 
 # ── Schema 驗證 ───────────────────────────────────────────────────
 
+def _sanitize_concepts(raw: object) -> list:
+    """將 LLM 輸出的 concepts 欄位正規化為 list[str]；無效值 fallback 空列表。"""
+    if not isinstance(raw, list):
+        return []
+    return [c.strip().lower() for c in raw if isinstance(c, str) and c.strip()]
+
+
 def _validate_candidate(candidate: object) -> bool:
     """驗證 memory candidate 結構。"""
     if not isinstance(candidate, dict):
@@ -343,6 +352,8 @@ def _make_frontmatter(candidate: dict, today_str: str) -> str:
     else:
         review_by = "null"
 
+    concepts = candidate.get("concepts") or []
+    concepts_line = f"concepts: [{', '.join(concepts)}]\n"
     return (
         f"---\n"
         f"name: {candidate['name']}\n"
@@ -352,6 +363,7 @@ def _make_frontmatter(candidate: dict, today_str: str) -> str:
         f"valid_until: null\n"
         f"review_by: {review_by}\n"
         f"superseded_by: null\n"
+        f"{concepts_line}"
         f"---\n\n"
     )
 
@@ -827,6 +839,9 @@ def _process_outputs(
                 dry_run=dry_run,
             )
             continue
+
+        # concepts sanitize（optional 欄位，LLM 輸出異常時 fallback []）
+        candidate["concepts"] = _sanitize_concepts(candidate.get("concepts"))
 
         # existing_match → 跳過（不建立重複條目）
         existing_match = candidate.get("existing_match")
