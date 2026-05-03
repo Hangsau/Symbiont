@@ -117,3 +117,8 @@ search_memory:
 babysit:
   teaching_timeout_seconds: 1800   # teaching loop 等待 agent 回應的逾時（秒）
   lock_max_age_seconds: 900        # babysit.lock 超過此秒視為崩潰遺留，強制刪除
+
+tier_classification:
+  enabled: true                    # false = 停用自動分類，所有新記憶用 default_tier
+  default_tier: L2                 # claude -p 失敗時的 fallback；也是 backfill 前舊記憶的預設
+  l1_max_lines: 30                 # MEMORY.md 索引目標上限行數（L1 條目）
