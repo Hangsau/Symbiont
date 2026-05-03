@@ -66,7 +66,7 @@ Symbiont/
 |------|------|------|------|
 | `evolve.py` | 最新 .jsonl session log | CLAUDE.md 規則更新、evolution_log append | Stop hook 寫 pending_evolve.txt → `scripts/run_evolve.py`（pythonw.exe）每 1 分鐘 poll；每 10 次後觸發 synthesize.py |
 | `synthesize.py` | 最近 N 個 session 的 friction + habit 片段 + 現有 skill descriptions | `~/.claude/skills/` 新建或迭代 skill（quality_score < 2 跳過）、memory/thoughts/ 洞見、knowledge/<type>/ 蒸餾知識、低使用率 skill 清掃 | 由 evolve.py 計數觸發（每 10 次 session） |
-| `memory_audit.py` | memory/*.md 的 review_by 欄位 | archive 移動、MEMORY.md 更新；`data/last_audit_ts.txt` | 每小時觸發（`scripts/run_audit.py`，pythonw.exe）；wrapper 內部 24h cooldown 控制實際跑頻率（可在 `config.yaml` 改 `audit_cooldown_hours`），筆電/出差/Sleep 用戶開機後 1 小時內必補跑 |
+| `memory_audit.py` | memory/*.md 的 review_by 欄位、MEMORY.md 索引行數 | archive 移動、MEMORY.md 更新（含索引溢出歸檔）；`data/last_audit_ts.txt` | 每小時觸發（`scripts/run_audit.py`，pythonw.exe）；wrapper 內部 24h cooldown 控制實際跑頻率（可在 `config.yaml` 改 `audit_cooldown_hours`），筆電/出差/Sleep 用戶開機後 1 小時內必補跑 |
 | `session_wrap.py` | 最新 .jsonl session log + 現有 MEMORY.md | memory/<feedback\|project\|reference>_*.md 新增、memory/thoughts/YYYY-MM-DD_*.md、MEMORY.md 索引更新；schema 失敗 → `memory/_malformed/`（confidence < threshold 丟棄） | Stop hook 寫 pending_session_wrap.txt → `scripts/run_session_wrap.py`（pythonw.exe）每 1 分鐘 poll；wrap_done.txt 15 分內存在時跳過（互斥） |
 | `babysit.py` | for-claude/<agent>/ 新訊息 | claude-inbox/<agent>/ 回應；data/heartbeat.json | 每 2 分鐘（`scripts/run_babysit.py`，pythonw.exe）。LLM 第一行輸出 `MODE: teaching\|discussion` 標籤決定後續對話模式 |
 | `healthz.py` | data/heartbeat.json | stdout 健康報告 + exit code 0/1 | 手動 CLI（`python src/healthz.py [--max-age N] [--allow-partial] [--json]`） |
