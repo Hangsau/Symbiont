@@ -50,12 +50,12 @@ TAGS_RE = re.compile(r"^(?:concepts|tags):\s*\[([^\]]*)\]", re.MULTILINE)
 
 # ── 核心邏輯 ──────────────────────────────────────────────────────
 
-def expand_query(query: str, claude_cli: str, timeout: int) -> list[str]:
+def expand_query(query: str, cfg: dict) -> list[str]:
     """用 claude -p 將 query 展開為 concept list；失敗回傳空列表。"""
     if not query or not query.strip():
         return []
     prompt = EXPAND_PROMPT.format(query=query)
-    result = run_claude(prompt, claude_cli=claude_cli, timeout=timeout)
+    result = run_claude(prompt, cfg)
     if not result:
         return []
     try:
@@ -104,10 +104,9 @@ def _overlap_score(query_concepts: list[str], file_concepts: list[str]) -> float
 def search(
     query: str,
     memory_dir: Path,
-    claude_cli: str = "claude",
+    cfg: dict | None = None,
     top_n: int = 5,
     min_score: float = 0.2,
-    timeout: int = 30,
 ) -> list[dict]:
     """
     主搜尋函式。回傳 list of {path, score, name, description}，按 score 降序。
@@ -116,7 +115,7 @@ def search(
     if not memory_dir.exists():
         return []
 
-    query_concepts = expand_query(query, claude_cli, timeout)
+    query_concepts = expand_query(query, cfg or {})
     if not query_concepts:
         print(f"[search_memory] warning: expand_query returned empty for '{query}'", file=sys.stderr)
 
@@ -124,7 +123,7 @@ def search(
 
     # 掃 memory/ 和 knowledge/ 下所有 .md
     search_dirs = [memory_dir]
-    knowledge_dir = memory_dir.parent / "knowledge"
+    knowledge_dir = get_path(cfg or {}, "primary_project_dir") / "knowledge" if cfg else memory_dir.parent / "knowledge"
     if knowledge_dir.exists():
         search_dirs.append(knowledge_dir)
 
@@ -182,7 +181,6 @@ def main() -> None:
     sm_cfg = cfg.get("search_memory", {})
     top_n = args.top_n if args.top_n is not None else sm_cfg.get("top_n", 5)
     min_score = args.min_score if args.min_score is not None else sm_cfg.get("min_score", 0.2)
-    timeout = sm_cfg.get("timeout_seconds", 30)
 
     if args.memory_dir:
         memory_dir = Path(args.memory_dir)
@@ -193,15 +191,12 @@ def main() -> None:
             print("[search_memory] error: cannot resolve memory_dir", file=sys.stderr)
             return
 
-    claude_cli = cfg.get("paths", {}).get("claude_cli", "claude")
-
     results = search(
         query=args.query,
         memory_dir=memory_dir,
-        claude_cli=claude_cli,
+        cfg=cfg,
         top_n=top_n,
         min_score=min_score,
-        timeout=timeout,
     )
 
     if args.json:
