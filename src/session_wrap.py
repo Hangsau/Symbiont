@@ -37,7 +37,7 @@ from src.utils.config_loader import load_config, get_path, get_int, get_str
 from src.utils.session_reader import parse_session, find_session_by_uuid, find_sessions_after
 from src.utils.claude_runner import run_claude, check_auth
 from src.utils.file_ops import safe_read, safe_write, append_log, FileLock, rotate_log
-from src.memory_audit import _prune_oldest_index_entries
+from src.memory_audit import _prune_oldest_index_entries, _set_frontmatter_field
 
 
 # ── 常數 ──────────────────────────────────────────────────────────
@@ -365,6 +365,7 @@ def _make_frontmatter(candidate: dict, today_str: str) -> str:
         f"review_by: {review_by}\n"
         f"superseded_by: null\n"
         f"{concepts_line}"
+        f"tier: L2\n"
         f"---\n\n"
     )
 
@@ -506,6 +507,37 @@ def _resolve_filename(memory_dir: Path, filename: str) -> Path:
     return memory_dir / f"{stem}_{ts}{suffix}"
 
 
+TIER_PROMPT = """\
+評估以下記憶條目是否應注入每次 Claude Code session context（L1），還是按需查詢即可（L2）。
+
+L1 條件（三條全中才選 L1）：
+① 跨專案都會用到（不只針對特定 project）
+② 沒預警就會需要它（session 開始前就必須知道）
+③ 不知道就會立刻犯錯
+
+記憶：
+  名稱：{name}
+  類型：{mem_type}
+  說明：{description}
+
+只回答 L1 或 L2，不要其他文字。"""
+
+
+def _evaluate_tier(candidate: dict, cfg: dict, default_tier: str) -> str:
+    """呼叫 claude -p 評估記憶 tier，失敗或格式錯誤時回傳 default_tier。"""
+    prompt = TIER_PROMPT.format(
+        name=candidate.get("name", ""),
+        mem_type=candidate.get("type", ""),
+        description=candidate.get("description", ""),
+    )
+    result = run_claude(prompt, cfg)
+    if result is not None:
+        tier = result.strip().upper()
+        if tier in ("L1", "L2"):
+            return tier
+    return default_tier
+
+
 def _write_memory_candidate(
     candidate: dict,
     memory_dir: Path,
@@ -513,6 +545,9 @@ def _write_memory_candidate(
     today_str: str,
     dry_run: bool,
     audit_log: Path,
+    cfg: dict | None = None,
+    tier_enabled: bool = False,
+    default_tier: str = "L2",
 ) -> bool:
     """寫入一個 memory candidate，並更新 MEMORY.md 索引。
 
@@ -535,7 +570,18 @@ def _write_memory_candidate(
                    f"[session_wrap] failed to write memory file: {dest.name}")
         return False
 
-    # 更新 MEMORY.md 索引
+    # ── Tier 評估：決定是否進 MEMORY.md 索引 ────────────────────
+    tier = "L1"  # dry-run 或 tier 停用時預設 L1（維持原有行為）
+    if tier_enabled and not dry_run and cfg is not None:
+        tier = _evaluate_tier(candidate, cfg, default_tier)
+        updated = _set_frontmatter_field(safe_read(dest) or full_content, "tier", tier)
+        safe_write(dest, updated)
+
+    if tier == "L2":
+        print(f"[session_wrap] memory written (tier L2, not indexed): {dest.name}")
+        return True
+
+    # 更新 MEMORY.md 索引（tier L1）
     ok = _append_memory_index_line(
         index_path,
         name=candidate["name"],
@@ -547,7 +593,7 @@ def _write_memory_candidate(
                    f"[session_wrap] written {dest.name} but failed to update MEMORY.md index")
         # 不刪已寫的檔案（孤兒檔案優於 broken link）
 
-    print(f"[session_wrap] memory written: {dest.name}")
+    print(f"[session_wrap] memory written (tier {tier}): {dest.name}")
     return True
 
 
@@ -767,6 +813,7 @@ def run(
 
     try:
         with lock:
+            tier_cfg = cfg.get("tier_classification", {})
             written_count, malformed_count, discarded_count = _process_outputs(
                 candidates_raw=candidates_raw,
                 insight_raw=insight_raw,
@@ -777,6 +824,9 @@ def run(
                 auto_write=auto_write,
                 dry_run=dry_run,
                 audit_log=audit_log,
+                cfg=cfg,
+                tier_enabled=tier_cfg.get("enabled", False),
+                default_tier=tier_cfg.get("default_tier", "L2"),
             )
 
             # ── 索引溢出即時修剪 ──────────────────────────────────
@@ -824,6 +874,9 @@ def _process_outputs(
     auto_write: bool,
     dry_run: bool,
     audit_log: Path,
+    cfg: dict | None = None,
+    tier_enabled: bool = False,
+    default_tier: str = "L2",
 ) -> tuple[int, int, int]:
     """處理所有 candidates 和 insight。回傳 (written, malformed, discarded)。
     呼叫前必須持有 memory.lock。"""
@@ -868,7 +921,8 @@ def _process_outputs(
 
         if auto_write or dry_run:
             ok = _write_memory_candidate(
-                candidate, memory_dir, index_path, today_str, dry_run, audit_log
+                candidate, memory_dir, index_path, today_str, dry_run, audit_log,
+                cfg=cfg, tier_enabled=tier_enabled, default_tier=default_tier,
             )
             if ok:
                 written_count += 1
