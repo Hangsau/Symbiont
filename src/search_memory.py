@@ -71,25 +71,34 @@ def expand_query(query: str, cfg: dict) -> list[str]:
         return []
 
 
-def _parse_concepts_from_file(path: Path) -> list[str]:
-    """從 frontmatter 讀 concepts 或 tags 欄位。"""
+def _parse_md_metadata(path: Path) -> dict | None:
+    """從 .md 文件一次讀取 concepts/tags、name、description。無 concepts 回傳 None。"""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return []
+        return None
 
     fm_match = FRONTMATTER_RE.match(text)
     if not fm_match:
-        return []
+        return None
 
     frontmatter = fm_match.group(1)
     tags_match = TAGS_RE.search(frontmatter)
     if not tags_match:
-        return []
+        return None
 
     raw = tags_match.group(1)
-    tags = [t.strip().strip('"\'').lower() for t in raw.split(",") if t.strip()]
-    return tags
+    concepts = [t.strip().strip('"\'').lower() for t in raw.split(",") if t.strip()]
+    if not concepts:
+        return None
+
+    name_m = re.search(r"^name:\s*(.+)$", frontmatter, re.MULTILINE)
+    desc_m = re.search(r"^description:\s*(.+)$", frontmatter, re.MULTILINE)
+    return {
+        "concepts": concepts,
+        "name": name_m.group(1).strip() if name_m else None,
+        "description": desc_m.group(1).strip() if desc_m else None,
+    }
 
 
 def _overlap_score(query_concepts: list[str], file_concepts: list[str]) -> float:
@@ -118,43 +127,36 @@ def search(
     query_concepts = expand_query(query, cfg or {})
     if not query_concepts:
         print(f"[search_memory] warning: expand_query returned empty for '{query}'", file=sys.stderr)
+        return []
 
     results: list[dict] = []
 
     # 掃 memory/ 和 knowledge/ 下所有 .md
     search_dirs = [memory_dir]
-    knowledge_dir = get_path(cfg or {}, "primary_project_dir") / "knowledge" if cfg else memory_dir.parent / "knowledge"
+    knowledge_dir = get_path(cfg or {}, "primary_project_dir") / "knowledge"
     if knowledge_dir.exists():
         search_dirs.append(knowledge_dir)
 
     for base_dir in search_dirs:
         for md_path in base_dir.rglob("*.md"):
-            # 跳過索引檔和 _malformed/
             if md_path.name in ("MEMORY.md", "KNOWLEDGE_TAGS.md"):
                 continue
             if "_malformed" in md_path.parts:
                 continue
 
-            file_concepts = _parse_concepts_from_file(md_path)
-            if not file_concepts:
+            meta = _parse_md_metadata(md_path)
+            if meta is None:
                 continue
 
-            score = _overlap_score(query_concepts, file_concepts)
+            score = _overlap_score(query_concepts, meta["concepts"])
             if score < min_score:
                 continue
 
-            # 讀 name / description 供顯示
-            try:
-                text = md_path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                text = ""
-            name_m = re.search(r"^name:\s*(.+)$", text, re.MULTILINE)
-            desc_m = re.search(r"^description:\s*(.+)$", text, re.MULTILINE)
             results.append({
                 "path": str(md_path),
                 "score": round(score, 3),
-                "name": name_m.group(1).strip() if name_m else md_path.stem,
-                "description": desc_m.group(1).strip() if desc_m else "",
+                "name": meta["name"] or md_path.stem,
+                "description": meta["description"] or "",
             })
 
     results.sort(key=lambda x: x["score"], reverse=True)
