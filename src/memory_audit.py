@@ -237,11 +237,11 @@ def _prune_oldest_index_entries(
             break
 
     # 收集 Thoughts section 之前的所有條目行
-    candidates: list[tuple[int, str]] = []
+    candidates: list[str] = []
     for i in range(thoughts_start):
         m = _ENTRY_RE.match(lines[i])
         if m:
-            candidates.append((i, m.group(1)))
+            candidates.append(m.group(1))
 
     to_process = candidates[:batch_size]
     if not to_process:
@@ -249,12 +249,12 @@ def _prune_oldest_index_entries(
 
     if dry_run:
         print(f"  [dry-run] 索引溢出歸檔候選（最舊 {len(to_process)} 條）：")
-        for _, path_str in to_process:
+        for path_str in to_process:
             print(f"    - {path_str}")
         return len(to_process)
 
     processed = 0
-    for _, path_str in to_process:
+    for path_str in to_process:
         md_path = memory_dir / path_str
         filename = Path(path_str).name
 
