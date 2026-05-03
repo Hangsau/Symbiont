@@ -107,6 +107,11 @@ synthesize:
   skill_stdev_multiplier: 2.0      # 低於 mean - N×stdev 視為低使用率
   skill_low_cycles_to_delete: 2    # 連續幾次低使用率才刪除 skill
 
+search_memory:
+  top_n: 5                         # 回傳最相關的前 N 條記憶
+  min_score: 0.2                   # overlap 分數低於此值的條目不回傳
+  timeout_seconds: 30              # claude -p 展開 concepts 的逾時（秒）
+
 babysit:
   teaching_timeout_seconds: 1800   # teaching loop 等待 agent 回應的逾時（秒）
   lock_max_age_seconds: 900        # babysit.lock 超過此秒視為崩潰遺留，強制刪除
