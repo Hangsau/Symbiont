@@ -788,7 +788,7 @@ def run(
                     archive_dir = memory_dir / "archive"
                     archive_dir.mkdir(exist_ok=True)
                     pruned = _prune_oldest_index_entries(
-                        memory_dir, index_path, archive_dir, prune_batch, today_str, dry_run=False
+                        memory_dir, index_path, archive_dir, prune_batch, today_str, dry_run
                     )
                     if pruned:
                         msg = f"[session_wrap] index pruned: {pruned} entries archived"
