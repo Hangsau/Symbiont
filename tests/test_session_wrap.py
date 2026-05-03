@@ -667,3 +667,107 @@ class TestSkipIfWrapDone:
         assert llm_call_count[0] == 1, (
             "wrap_done.txt 超過 15 分鐘後應繼續執行（呼叫 LLM 一次）"
         )
+
+
+# ── Test 11: 索引溢出即時修剪 ─────────────────────────────────────
+
+class TestIndexPruneOnSessionWrap:
+    """session_wrap 在 with lock: 區塊結尾執行即時 index prune。"""
+
+    FAKE_CANDIDATE = {
+        "name": "test feedback",
+        "description": "test",
+        "type": "feedback",
+        "body": "Some feedback content.",
+        "confidence": 0.9,
+    }
+
+    def _make_fat_index(self, memory_dir: Path, n_entries: int) -> None:
+        """建立含 n_entries 條孤兒索引行的 MEMORY.md（對應 .md 不存在）。"""
+        lines = ["# Memory Index\n"]
+        for i in range(n_entries):
+            lines.append(f"- [entry {i:03d}](orphan_{i:03d}.md) — desc\n")
+        (memory_dir / "MEMORY.md").write_text("".join(lines), encoding="utf-8")
+
+    def test_prune_triggered_when_over_threshold(self, tmp_path, monkeypatch):
+        cfg, project_dir, memory_dir = _make_fixture(tmp_path)
+        cfg["memory_audit"]["index_prune_threshold"] = 5
+        cfg["memory_audit"]["index_prune_batch_size"] = 3
+
+        self._make_fat_index(memory_dir, 10)  # 11 lines (header + 10 entries) > threshold 5
+
+        session_uuid = _uuid_mod.uuid4().hex
+        jsonl = project_dir / f"{session_uuid}.jsonl"
+        _make_jsonl(jsonl, n_turns=5)
+        _make_pending(tmp_path, session_uuid)
+
+        monkeypatch.setattr("src.session_wrap.load_config", lambda: cfg)
+        monkeypatch.setattr("src.session_wrap.check_auth", lambda: True)
+        monkeypatch.setattr("src.session_wrap.run_claude",
+                            lambda p, c: _good_llm_output(candidates=[self.FAKE_CANDIDATE]))
+        monkeypatch.setattr("src.session_wrap.rotate_log", lambda *a, **kw: None)
+
+        result = sw.run(dry_run=False, skip_if_wrap_done=False)
+
+        assert result == 0
+        index_text = (memory_dir / "MEMORY.md").read_text(encoding="utf-8")
+        index_lines = len(index_text.splitlines())
+        # _make_fat_index(10) → 11 行（1 header + 10 entries），prune 3 條 → 8 行
+        assert index_lines == 8, (
+            f"MEMORY.md 應剩 8 行（11 原始 - 3 修剪），實際：{index_lines}"
+        )
+
+    def test_prune_not_triggered_when_under_threshold(self, tmp_path, monkeypatch):
+        cfg, project_dir, memory_dir = _make_fixture(tmp_path)
+        cfg["memory_audit"]["index_prune_threshold"] = 1000  # very high
+        cfg["memory_audit"]["index_prune_batch_size"] = 5
+
+        self._make_fat_index(memory_dir, 10)  # 11 lines << threshold 1000
+        original_lines = len((memory_dir / "MEMORY.md").read_text(encoding="utf-8").splitlines())
+
+        session_uuid = _uuid_mod.uuid4().hex
+        jsonl = project_dir / f"{session_uuid}.jsonl"
+        _make_jsonl(jsonl, n_turns=5)
+        _make_pending(tmp_path, session_uuid)
+
+        monkeypatch.setattr("src.session_wrap.load_config", lambda: cfg)
+        monkeypatch.setattr("src.session_wrap.check_auth", lambda: True)
+        monkeypatch.setattr("src.session_wrap.run_claude",
+                            lambda p, c: _good_llm_output(candidates=[self.FAKE_CANDIDATE]))
+        monkeypatch.setattr("src.session_wrap.rotate_log", lambda *a, **kw: None)
+
+        result = sw.run(dry_run=False, skip_if_wrap_done=False)
+
+        assert result == 0
+        new_lines = len((memory_dir / "MEMORY.md").read_text(encoding="utf-8").splitlines())
+        # 未達 threshold，無修剪；行數不應減少
+        assert new_lines >= original_lines, (
+            f"未達 threshold 不應修剪，行數不應減少（原 {original_lines}，實際 {new_lines}）"
+        )
+
+    def test_prune_not_triggered_on_early_return(self, tmp_path, monkeypatch):
+        """短 session（< MIN_TURNS）→ early return，不進 lock block，不觸發 prune。"""
+        cfg, project_dir, memory_dir = _make_fixture(tmp_path)
+        cfg["memory_audit"]["index_prune_threshold"] = 5
+        cfg["memory_audit"]["index_prune_batch_size"] = 3
+
+        self._make_fat_index(memory_dir, 10)
+        original_text = (memory_dir / "MEMORY.md").read_text(encoding="utf-8")
+
+        session_uuid = _uuid_mod.uuid4().hex
+        jsonl = project_dir / f"{session_uuid}.jsonl"
+        _make_jsonl(jsonl, n_turns=1)  # < MIN_TURNS=3 → early return
+        _make_pending(tmp_path, session_uuid)
+
+        monkeypatch.setattr("src.session_wrap.load_config", lambda: cfg)
+        monkeypatch.setattr("src.session_wrap.check_auth", lambda: True)
+        monkeypatch.setattr("src.session_wrap.run_claude",
+                            lambda p, c: _good_llm_output(candidates=[self.FAKE_CANDIDATE]))
+        monkeypatch.setattr("src.session_wrap.rotate_log", lambda *a, **kw: None)
+
+        result = sw.run(dry_run=False, skip_if_wrap_done=False)
+
+        assert result == 0
+        assert (memory_dir / "MEMORY.md").read_text(encoding="utf-8") == original_text, (
+            "early return 不應觸發 prune，MEMORY.md 應維持不變"
+        )

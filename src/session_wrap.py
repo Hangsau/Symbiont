@@ -37,6 +37,7 @@ from src.utils.config_loader import load_config, get_path, get_int, get_str
 from src.utils.session_reader import parse_session, find_session_by_uuid, find_sessions_after
 from src.utils.claude_runner import run_claude, check_auth
 from src.utils.file_ops import safe_read, safe_write, append_log, FileLock, rotate_log
+from src.memory_audit import _prune_oldest_index_entries
 
 
 # ── 常數 ──────────────────────────────────────────────────────────
@@ -777,6 +778,22 @@ def run(
                 dry_run=dry_run,
                 audit_log=audit_log,
             )
+
+            # ── 索引溢出即時修剪 ──────────────────────────────────
+            if auto_write:
+                prune_threshold = get_int(cfg, "memory_audit", "index_prune_threshold", default=180)
+                prune_batch = get_int(cfg, "memory_audit", "index_prune_batch_size", default=20)
+                index_content = safe_read(index_path) or ""
+                if len(index_content.splitlines()) > prune_threshold:
+                    archive_dir = memory_dir / "archive"
+                    archive_dir.mkdir(exist_ok=True)
+                    pruned = _prune_oldest_index_entries(
+                        memory_dir, index_path, archive_dir, prune_batch, today_str, dry_run=False
+                    )
+                    if pruned:
+                        msg = f"[session_wrap] index pruned: {pruned} entries archived"
+                        print(msg)
+                        append_log(audit_log, msg)
     except TimeoutError:
         msg = "[session_wrap] memory.lock busy → skipping (pending 留著，下次重試)"
         append_log(audit_log, msg)

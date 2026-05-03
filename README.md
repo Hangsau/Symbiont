@@ -20,7 +20,8 @@ Claude Code sessions are ephemeral. Every session ends, the context disappears.
 |--------|-------------|-------------|
 | `evolve.py` | Reads session logs, extracts behavioral rules, writes them to `~/.claude/CLAUDE.md` | After every Claude Code session ends |
 | `synthesize.py` | Analyzes the last 10 sessions together, identifies recurring patterns, auto-generates Guard / Workflow / Audit skills, writes insights to memory, prunes unused skills | Every 10 sessions (triggered by evolve.py) |
-| `memory_audit.py` | Scans memory files for expired `review_by` dates, archives stale entries | Hourly trigger + 24h cooldown (reliable on laptops/travel) |
+| `memory_audit.py` | Scans memory files for expired `review_by` dates, archives stale entries, prunes index if over line limit | Hourly trigger + 24h cooldown (reliable on laptops/travel) |
+| `session_wrap.py` | Post-session automation: extracts memory candidates + insights via single LLM call, writes to `memory/`, prunes index immediately if over threshold | After every Claude Code session ends (Stop hook) |
 | `babysit.py` | Polls AI agent inboxes, generates Socratic guidance via `claude -p`, sends replies | Every 2 minutes |
 
 Each module is independent — use just `evolve.py` if that's all you need.
