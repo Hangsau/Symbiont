@@ -204,6 +204,74 @@ def _extract_first_line(content: str) -> str:
     return (fallback[:ARCHIVE_SUMMARY_MAX_CHARS] if fallback else "(無摘要)")
 
 
+# ── 索引溢出歸檔 ──────────────────────────────────────────────────
+
+_ENTRY_RE = re.compile(r'^\s*-\s+\[.*?\]\(([^)]+)\)')
+
+
+def _prune_oldest_index_entries(
+    memory_dir: Path,
+    index_path: Path,
+    archive_dir: Path,
+    batch_size: int,
+    today_str: str,
+    dry_run: bool,
+) -> int:
+    """MEMORY.md 超過閾值時，歸檔最舊的 batch_size 條非 Thoughts 索引條目。
+
+    - ## Thoughts section（及之後）整塊跳過，不列入候選
+    - 對應 .md 存在 → _archive_file()；不存在（孤兒行）→ 只刪索引行
+    - 回傳實際處理條數
+    """
+    content = safe_read(index_path)
+    if not content:
+        return 0
+
+    lines = content.splitlines()
+
+    # 找 ## Thoughts section 起始行（找不到則所有行都是候選範圍）
+    thoughts_start = len(lines)
+    for i, line in enumerate(lines):
+        if re.match(r'^##\s+Thoughts', line.strip()):
+            thoughts_start = i
+            break
+
+    # 收集 Thoughts section 之前的所有條目行
+    candidates: list[tuple[int, str]] = []
+    for i in range(thoughts_start):
+        m = _ENTRY_RE.match(lines[i])
+        if m:
+            candidates.append((i, m.group(1)))
+
+    to_process = candidates[:batch_size]
+    if not to_process:
+        return 0
+
+    if dry_run:
+        print(f"  [dry-run] 索引溢出歸檔候選（最舊 {len(to_process)} 條）：")
+        for _, path_str in to_process:
+            print(f"    - {path_str}")
+        return len(to_process)
+
+    processed = 0
+    for _, path_str in to_process:
+        md_path = memory_dir / path_str
+        filename = Path(path_str).name
+
+        if md_path.exists():
+            if _archive_file(md_path, archive_dir, index_path, today_str, dry_run=False):
+                processed += 1
+            else:
+                print(f"  [warn] 歸檔失敗，略過：{path_str}", file=sys.stderr)
+        else:
+            # 孤兒索引行：對應 .md 不存在，只移除索引行
+            print(f"  [warn] 孤兒索引行（檔案不存在），移除：{path_str}")
+            if _remove_from_memory_index(index_path, filename, dry_run=False):
+                processed += 1
+
+    return processed
+
+
 # ── 主流程 ────────────────────────────────────────────────────────
 
 def run(dry_run: bool = False) -> int:
@@ -220,6 +288,8 @@ def run(dry_run: bool = False) -> int:
     auto_archive = audit_cfg.get("auto_archive", True)
     threshold = get_int(cfg, "memory_audit", "thoughts_archive_threshold", default=30)
     warn_lines = get_int(cfg, "memory_audit", "memory_index_warn_lines", default=170)
+    prune_threshold = get_int(cfg, "memory_audit", "index_prune_threshold", default=180)
+    prune_batch_size = get_int(cfg, "memory_audit", "index_prune_batch_size", default=20)
 
     # ── 路徑解析 ──────────────────────────────────────────────────
     try:
@@ -306,9 +376,25 @@ def run(dry_run: bool = False) -> int:
         index_content = safe_read(index_path)
         memory_lines = len(index_content.splitlines()) if index_content else 0
 
+        # ── 3.5. 索引溢出歸檔 ────────────────────────────────────────
+        pruned_count = 0
+        if memory_lines > prune_threshold:
+            if auto_archive:
+                pruned_count = _prune_oldest_index_entries(
+                    memory_dir, index_path, archive_dir, prune_batch_size, today_str, dry_run
+                )
+                # 重新讀取行數（歸檔後索引縮短）
+                if not dry_run:
+                    index_content = safe_read(index_path)
+                    memory_lines = len(index_content.splitlines()) if index_content else 0
+            else:
+                print(f"  [報告] MEMORY.md {memory_lines} 行，超過 {prune_threshold}"
+                      f"（auto_archive=false，略過索引歸檔）")
+
         # ── 4. 輸出摘要 ──────────────────────────────────────────────
         now_str = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        nothing_to_do = not archived_count and not thoughts_archived and not overdue_items
+        nothing_to_do = (not archived_count and not thoughts_archived
+                         and not overdue_items and not pruned_count)
 
         lines = [f"\n[{now_str}] memory_audit 執行摘要{'（dry-run）' if dry_run else ''}"]
 
@@ -316,6 +402,8 @@ def run(dry_run: bool = False) -> int:
             lines.append(f"  ✓ valid_until 歸檔：{archived_count} 個移至 archive/")
         if thoughts_archived:
             lines.append(f"  ✓ thoughts/ 歸檔：{thoughts_archived} 個移至 archive/{THOUGHTS_ARCHIVE_FILE}")
+        if pruned_count:
+            lines.append(f"  ✓ 索引溢出歸檔：{pruned_count} 條移至 archive/")
         if overdue_items:
             lines.append("  ⚠ review_by 到期（需人工確認）：")
             for name, d in overdue_items:

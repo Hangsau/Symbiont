@@ -118,7 +118,7 @@ Both sides reflect independently and asynchronously:
 1. Scans all `memory/*.md` files for `review_by:` frontmatter
 2. Archives entries past their review date → `memory/archive/`
 3. If `memory/thoughts/` exceeds threshold: archives the oldest entries
-4. Warns if `MEMORY.md` index is approaching the 200-line limit
+4. Archives oldest index entries and warns if `MEMORY.md` exceeds the line limit
 
 ```yaml
 memory_audit:
@@ -126,6 +126,8 @@ memory_audit:
   auto_archive: true    # false = report only, no file moves
   thoughts_archive_threshold: 30
   memory_index_warn_lines: 170
+  index_prune_threshold: 180    # archive oldest entries when index exceeds this line count
+  index_prune_batch_size: 20    # max entries to archive per run (oldest first)
 ```
 
 ---
@@ -358,7 +360,9 @@ claude_runner:
   max_retries: 2
 
 memory_audit:
-  enabled: false   # set to true to activate
+  enabled: false              # set to true to activate
+  # index_prune_threshold: 180  # optional: archive oldest entries when index exceeds N lines
+  # index_prune_batch_size: 20  # optional: max entries archived per run
 
 evolve:
   distill_threshold: 25   # rule count that triggers distillation; 0 = disabled
