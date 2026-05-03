@@ -153,7 +153,7 @@ def main() -> int:
             tier = _evaluate_tier(content, cfg, default_tier)
             updated = _set_frontmatter_field(content, "tier", tier)
             if safe_write(md_path, updated):
-                print(f"  ✓ {md_path.name} → tier: {tier}")
+                print(f"  [ok] {md_path.name} -> tier: {tier}")
                 ok_count += 1
             else:
                 raise RuntimeError("safe_write 回傳 False")
@@ -161,7 +161,7 @@ def main() -> int:
             ts = datetime.utcnow().isoformat(timespec="seconds")
             msg = f"[{ts}] backfill_tier 失敗 {md_path.name}: {e}"
             append_log(error_log, msg)
-            print(f"  ✗ {md_path.name} → 失敗（記入 error.log）", file=sys.stderr)
+            print(f"  [fail] {md_path.name} -> 失敗（記入 error.log）", file=sys.stderr)
             fail_count += 1
 
     print(f"[backfill_tier] 完成：成功 {ok_count}，失敗 {fail_count}")
