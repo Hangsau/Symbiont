@@ -102,7 +102,8 @@ def _resolve_cmd(cli: str) -> list[str]:
     return [cli]  # 最後保留原值，讓 FileNotFoundError 自然浮現
 
 
-def _call_claude(cli: str, prompt: str, timeout: int) -> tuple[bool, str]:
+def _call_claude(cli: str, prompt: str, timeout: int,
+                 cwd: str | None = None) -> tuple[bool, str]:
     """呼叫一次 claude -p。回傳 (success, output_or_error_msg)。"""
     try:
         cmd = _resolve_cmd(cli) + ["-p", prompt, "--output-format", "text"]
@@ -113,6 +114,7 @@ def _call_claude(cli: str, prompt: str, timeout: int) -> tuple[bool, str]:
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            cwd=cwd,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
         if result.returncode == 0:
@@ -120,16 +122,18 @@ def _call_claude(cli: str, prompt: str, timeout: int) -> tuple[bool, str]:
         return False, f"returncode={result.returncode} stderr={result.stderr.strip()}"
     except subprocess.TimeoutExpired:
         return False, f"timeout after {timeout}s"
-    except FileNotFoundError:
-        return False, f"claude CLI not found: {cli}"
+    except FileNotFoundError as e:
+        return False, f"claude CLI not found or cwd invalid: {e}"
     except Exception as e:
         return False, f"unexpected error: {e}"
 
 
-def run_claude(prompt: str, cfg: dict | None = None) -> str | None:
+def run_claude(prompt: str, cfg: dict | None = None,
+               cwd: str | None = None) -> str | None:
     """
     呼叫 claude -p，含 retry 與 error logging。
     成功回傳輸出字串，失敗回傳 None。
+    cwd：指定 claude 執行時的工作目錄（None = 繼承目前目錄）。
     """
     if cfg is None:
         cfg = load_config()
@@ -146,7 +150,7 @@ def run_claude(prompt: str, cfg: dict | None = None) -> str | None:
         return None
 
     for attempt in range(1, max_retries + 1):
-        success, output = _call_claude(cli, prompt, timeout)
+        success, output = _call_claude(cli, prompt, timeout, cwd=cwd)
         if success:
             return output
         if attempt < max_retries:

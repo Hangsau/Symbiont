@@ -137,6 +137,31 @@ if exist "%AGENT_DIR%\data\agents.yaml" (
     echo       （如需啟用 babysit，設定 agents.yaml 後告訴 Claude「啟用 babysit」）
 )
 
+REM user_jobs 每小時觸發 + 內部 per-job cooldown（pythonw.exe = 無視窗）
+REM 用戶在 config.yaml user_jobs 定義任意 claude -p 排程任務（含 pipeline）
+REM user_jobs: [] 時此 task 每小時 poll 但直接 exit 0，無任何操作
+set "USER_JOBS_CMD=\"%PYTHONW%\" \"%AGENT_DIR%\scripts\run_user_jobs.py\""
+
+schtasks /Query /TN "symbiont-user-jobs" >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    schtasks /Delete /TN "symbiont-user-jobs" /F >nul 2>&1
+)
+schtasks /Create /TN "symbiont-user-jobs" /TR %USER_JOBS_CMD% /SC HOURLY /MO 1 /RU "%USERNAME%" /F >nul
+if %ERRORLEVEL% EQU 0 (
+    echo       symbiont-user-jobs 已設定（每小時觸發 + per-job cooldown）
+) else (
+    echo [警告] symbiont-user-jobs Task Scheduler 設定失敗（可手動執行）
+)
+
+REM ── 安裝 add-scheduled-job skill → ~/.claude/skills/ ──────────────
+set "SKILL_SRC=%AGENT_DIR%\skills\add-scheduled-job"
+set "SKILL_DST=%USERPROFILE%\.claude\skills\add-scheduled-job"
+if exist "%SKILL_SRC%\SKILL.md" (
+    if not exist "%SKILL_DST%" mkdir "%SKILL_DST%"
+    copy /Y "%SKILL_SRC%\SKILL.md" "%SKILL_DST%\SKILL.md" >nul
+    echo       add-scheduled-job skill 已安裝到 ~/.claude/skills/
+)
+
 REM ── 4. 初始化 data/ 目錄 ─────────────────────────────────────────
 echo.
 echo [4/4] 初始化 data/ 目錄...

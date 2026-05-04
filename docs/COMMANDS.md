@@ -27,8 +27,12 @@
 3. 確認 Task Scheduler 任務已建立（執行過 `setup/setup_windows.bat` 即自動建立）：
    ```powershell
    Get-ScheduledTask -TaskName "symbiont-babysit"
+   Get-ScheduledTask -TaskName "symbiont-evolve"
+   Get-ScheduledTask -TaskName "symbiont-memory-audit"
+   Get-ScheduledTask -TaskName "symbiont-session-wrap"
+   Get-ScheduledTask -TaskName "symbiont-user-jobs"
    ```
-   若不存在，重新執行 `setup/setup_windows.bat`（需先確認 `data/agents.yaml` 存在）。
+   若任何一個不存在，重新執行 `setup/setup_windows.bat`（需先確認 `data/agents.yaml` 存在）。
 4. 驗證（等 2 分鐘後查 log）：
    ```bash
    tail -3 data/babysit_hook.log   # 應看到 babysit 執行記錄
@@ -425,6 +429,7 @@ for src, dest in list(mapping.items())[:10]:
    schtasks /Delete /TN "symbiont-memory-audit" /F
    schtasks /Delete /TN "symbiont-babysit" /F
    schtasks /Delete /TN "symbiont-session-wrap" /F
+   schtasks /Delete /TN "symbiont-user-jobs" /F
    ```
 2. 從 `~/.claude/settings.json` 的 `hooks.Stop` 陣列移除含 `Symbiont-stop-hook` 的條目
 3. 刪除旗標檔與 runtime state：
@@ -567,6 +572,39 @@ ls -la data/memory.lock     # 看 mtime
 第一次跑新版 evolve / synthesize，舊 state.json 會自動轉成 v2 schema、寫一份 `data/state.json.pre_v2_backup` 安全網。後續 read 不會再 migrate（已是 v2）。
 
 如果想強制重新 migrate：刪掉 v2 state，改名 `.pre_v2_backup` 回原檔名，重跑。
+
+---
+
+## 用戶自訂排程任務（user_jobs）
+
+**用戶說**：「幫我排程 X」「定時跑 Y」「每週執行 Z」
+
+**Claude 執行**：invoke `/add-scheduled-job` skill（`~/.claude/skills/add-scheduled-job/SKILL.md`）
+
+**手動管理**：
+
+```bash
+# 查看現有 jobs
+grep -A5 "user_jobs:" config.yaml
+
+# 查 Task Scheduler 狀態
+schtasks /Query /TN "symbiont-user-jobs"
+
+# 手動觸發一次（測試 + cooldown:0 的 job）
+python scripts/run_user_jobs.py
+
+# 查看執行 log
+cat data/user_jobs.log
+
+# 查單一 job 的 cooldown 狀態
+cat data/last_user_job_<name>_ts.txt
+```
+
+**格式參考**（詳見 `config.yaml` 末尾的 commented 範例）：
+- `type: simple`：單一 prompt
+- `type: pipeline`：多 step 依序執行，任一失敗不寫 cooldown
+- `cron`：UTC 時間，台北 = UTC+8（台北 12:00 → `0 4 * * *`）
+- `cooldown_hours`：兩次執行最短間隔（每日任務建議 20，每週建議 100）
 
 ---
 

@@ -225,6 +225,37 @@ type: local        # Same filesystem (Docker volumes, WSL2, local agents)
 
 ---
 
+### `user_scheduler.py` — Custom Scheduled Jobs
+
+Runs arbitrary `claude -p` tasks on a schedule you define in `config.yaml`.
+
+```yaml
+user_jobs:
+  - name: weekly-review
+    enabled: true
+    type: simple               # or "pipeline" for multi-session sequences
+    cron: "0 1 * * 1"         # UTC cron; Taiwan 09:00 Mon = UTC 01:00
+    cooldown_hours: 100
+    cwd: "C:/my-project"
+    prompt: |
+      Read HANDOFF.md first. Do weekly review and update HANDOFF.md.
+
+  - name: agora-batch
+    type: pipeline             # steps run sequentially; failure stops the chain
+    cron: "0 4 * * 6"         # Taiwan 12:00 Sat = UTC 04:00
+    cooldown_hours: 100
+    cwd: "C:/claudehome/projects/agora"
+    steps:
+      - prompt: "Read HANDOFF.md first. Run rounds 13-15. /wrap then exit."
+      - prompt: "Read HANDOFF.md first. Run rounds 16-18. /wrap then exit."
+```
+
+**How it works**: `scripts/run_user_jobs.py` triggers hourly (Task Scheduler). For each enabled job, it checks the UTC cron expression against the current time, then checks a per-job cooldown file (`data/last_user_job_<name>_ts.txt`). If both pass, it runs the job. Pipeline jobs only write the cooldown timestamp after all steps succeed — a failed step leaves the cooldown unwritten so the next hourly check retries from step 1.
+
+**Adding jobs**: tell Claude `"help me schedule X"` and the `/add-scheduled-job` skill handles the rest — it asks for timing, writes `config.yaml`, and verifies Task Scheduler is running.
+
+---
+
 ## Quick Start
 
 ### Requirements
@@ -307,6 +338,7 @@ Symbiont/
 │   ├── synthesize.py          # Cross-session batch analysis → skill generation
 │   ├── memory_audit.py        # Daily memory health maintenance
 │   ├── babysit.py             # Agent caretaker (reactive + teaching loop)
+│   ├── user_scheduler.py      # User-defined scheduled jobs (reads config.yaml user_jobs)
 │   └── utils/
 │       ├── session_reader.py     # Parse .jsonl Claude Code session logs
 │       ├── friction_extractor.py  # Extract correction signals (guard skill feed)
@@ -321,7 +353,11 @@ Symbiont/
 │   ├── run_evolve.py          # Task Scheduler wrapper: polls pending_evolve.txt every 1 min (pythonw.exe, no window)
 │   ├── run_audit.py           # Task Scheduler wrapper: hourly trigger + internal 24h cooldown (pythonw.exe, no window)
 │   ├── run_babysit.py         # Task Scheduler wrapper: runs babysit.py every 2 min (pythonw.exe, no window)
+│   ├── run_user_jobs.py       # Task Scheduler wrapper: hourly trigger + per-job cooldown for user_jobs
 │   └── symbiont-stop-hook.sh  # Stop hook script for Mac/Linux (copied to ~/.claude/scripts/ on install)
+├── skills/
+│   └── add-scheduled-job/
+│       └── SKILL.md           # Claude skill: guided UX for adding user_jobs entries (installed to ~/.claude/skills/ on setup)
 ├── setup/
 │   ├── setup_windows.bat      # Install: pip + Task Scheduler (1-min poll) + Stop hook
 │   ├── setup_memory.bat/.sh   # Initialize memory/ skeleton
@@ -402,6 +438,14 @@ Hourly (Task Scheduler — memory audit):
 
 Every 2 minutes (Task Scheduler):
         └── run babysit.py
+
+Hourly (Task Scheduler — user jobs):
+        └── scripts/run_user_jobs.py
+                ├── For each enabled job in config.yaml user_jobs:
+                │     ├── Check UTC cron expression against current time
+                │     ├── Read data/last_user_job_<name>_ts.txt (cooldown check)
+                │     └── Run job if both pass (simple: 1 claude -p; pipeline: sequential steps)
+                └── Write cooldown timestamp only after full success
 ```
 
 > **Windows note**: bash subshell background processes (`&`) are killed when the hook exits. Symbiont uses Task Scheduler + `pythonw.exe` (the windowless Python launcher) so there are no flash windows and no dropped processes.
@@ -426,6 +470,7 @@ Every 2 minutes (Task Scheduler):
 | `synthesize.py` | 1–4 per cycle (skill generation + 1 per memory type distilled) | Every 10 sessions |
 | `memory_audit.py` | **0** — file I/O only | Daily |
 | `babysit.py` | 1 per agent message | Only when the agent sends something |
+| `user_scheduler.py` | 1+ per job (depends on your prompts) | Per your cron + cooldown config |
 
 Typical impact on a Claude subscription: negligible for `evolve.py` alone (2–3 extra calls/day). `babysit.py` during an active teaching session: 10–30 calls/day depending on agent response frequency.
 
@@ -450,7 +495,7 @@ Symbiont went through a focused reliability hardening pass on 2026-04-30.
 **SSH safety**
 - All remote paths are `shlex.quote`-wrapped (preserving `~/` semantics) so no shell injection through agent config.
 
-**Test coverage**: 102 tests passing (up from 70). New integration tests cover local transport round-trip, SSH quoting, synthesize state cursor (backlog 25 → no loss), evolve fallback, FileLock concurrency (two-thread races), and staged commit resume.
+**Test coverage**: 206 tests passing (up from 102 after M11 + user_jobs scheduler). Tests cover local transport round-trip, SSH quoting, synthesize state cursor, evolve fallback, FileLock concurrency, staged commit resume, memory tier classification, and user_jobs cooldown logic.
 
 **Still requiring long-running deployment for full validation**:
 - Cross-session synthesis quality (skill generation accuracy, deduplication effectiveness over months)

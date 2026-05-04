@@ -106,6 +106,14 @@ else
                 >> "$DATA_DIR/session_wrap_hook.log" 2>&1
         fi
     ) &
-    echo "[symbiont-stop-hook] pending files written, evolve.py + session_wrap.py scheduled (30s/35s)"
+    # user_jobs：每次 session 結束後觸發，內部 cron + per-job cooldown 決定是否實際執行
+    # 等同 Windows 的 HOURLY Task Scheduler trigger + 內部 cooldown 機制
+    (
+        sleep 40
+        cd "$AGENT_DIR"
+        $PYTHON_CMD scripts/run_user_jobs.py \
+            >> "$DATA_DIR/user_jobs.log" 2>&1
+    ) &
+    echo "[symbiont-stop-hook] pending files written, evolve.py + session_wrap.py + user_jobs scheduled (30s/35s/40s)"
 fi
 exit 0
