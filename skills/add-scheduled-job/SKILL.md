@@ -8,7 +8,7 @@ trigger: /add-scheduled-job
 
 ### 1. 確認 Symbiont 路徑
 
-Read `C:\claudehome\CLAUDE.md` 找 Symbiont 專案路徑（通常是 `C:\claudehome\projects\Symbiont`）。
+Read 用戶的主 `CLAUDE.md`（通常是 `C:\<workdir>\CLAUDE.md`）找 Symbiont 專案路徑。
 Read `<symbiont>/config.yaml` 確認 `user_jobs` 區塊現有內容。
 
 ### 2. 收集 job 資訊
@@ -38,7 +38,7 @@ user_jobs:
     type: simple
     cron: "0 1 * * 1"        # UTC；台北時間每週一 09:00
     cooldown_hours: 100
-    cwd: "C:/claudehome/projects/my-project"
+    cwd: "C:/your-projects/my-project"
     prompt: |
       Read HANDOFF.md first. Do weekly review and update HANDOFF.md.
 
@@ -48,7 +48,7 @@ user_jobs:
     type: pipeline
     cron: "0 4 * * 6"        # UTC；台北時間每週六 12:00
     cooldown_hours: 100
-    cwd: "C:/claudehome/projects/agora"
+    cwd: "C:/your-projects/agora"
     steps:
       - prompt: |
           Read HANDOFF.md first. Run rounds 13-15. After round 15 run /wrap then exit.
@@ -65,7 +65,7 @@ schtasks /Query /TN "symbiont-user-jobs"
 若不存在，執行：
 ```bash
 PYTHONW=$(where pythonw.exe | head -1)
-AGENT_DIR="C:\\claudehome\\projects\\Symbiont"
+AGENT_DIR="C:\\your-projects\\Symbiont"
 schtasks /Create /TN "symbiont-user-jobs" /TR "\"$PYTHONW\" \"$AGENT_DIR\\scripts\\run_user_jobs.py\"" /SC HOURLY /MO 1 /RU "$USERNAME" /F
 ```
 

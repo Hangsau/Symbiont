@@ -134,7 +134,7 @@ self-pilot 期間「名稱混淆 / 路徑找錯 / 不知道去哪查」事件數
 
 - **M11**（CLAUDE.md audit 工具，幫 user 評估三層分層）— 等 pilot 數據後再決定是否做
 - **M10 演算法改進**（concept 展開策略、min_score 邏輯）— 等 pilot 數據後再決定
-- 用戶自己的 `claudehome/CLAUDE.md` / `~/.claude/CLAUDE.md` 內容設計（user content，非 Symbiont 範圍）
+- 用戶自己的專案 CLAUDE.md / `~/.claude/CLAUDE.md` 內容設計（user content，非 Symbiont 範圍）
 - M10 Phase 3 embeddings（獨立 milestone）
 
 ---

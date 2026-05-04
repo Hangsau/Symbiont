@@ -244,7 +244,7 @@ user_jobs:
     type: pipeline             # steps run sequentially; failure stops the chain
     cron: "0 4 * * 6"         # Taiwan 12:00 Sat = UTC 04:00
     cooldown_hours: 100
-    cwd: "C:/claudehome/projects/agora"
+    cwd: "C:/your-projects/agora"
     steps:
       - prompt: "Read HANDOFF.md first. Run rounds 13-15. /wrap then exit."
       - prompt: "Read HANDOFF.md first. Run rounds 16-18. /wrap then exit."

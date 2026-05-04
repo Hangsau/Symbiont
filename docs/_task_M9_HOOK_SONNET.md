@@ -11,15 +11,15 @@
 
 ## 工作目錄
 
-`C:/claudehome/projects/Symbiont/`
+`<Symbiont>/`
 
 ## 動手前必讀（依序）
 
-1. `C:/claudehome/projects/Symbiont/CLAUDE.md` — 專案工作守則 + 絕對禁忌
-2. `C:/claudehome/projects/Symbiont/HANDOFF.md` — 當前狀態 + 觸發點對照
-3. `C:/claudehome/projects/Symbiont/docs/M9_HOOK_INTEGRATION.md` — **本任務的 plan，全部細節在裡面**
-4. `C:/claudehome/projects/Symbiont/docs/M10_SEMANTIC_RETRIEVAL.md` — M10 設計（你要呼叫的 search_memory.py 來自這裡）
-5. `C:/claudehome/projects/Symbiont/src/search_memory.py` — 你會 import 的 `search()` 函式
+1. `<Symbiont>/CLAUDE.md` — 專案工作守則 + 絕對禁忌
+2. `<Symbiont>/HANDOFF.md` — 當前狀態 + 觸發點對照
+3. `<Symbiont>/docs/M9_HOOK_INTEGRATION.md` — **本任務的 plan，全部細節在裡面**
+4. `<Symbiont>/docs/M10_SEMANTIC_RETRIEVAL.md` — M10 設計（你要呼叫的 search_memory.py 來自這裡）
+5. `<Symbiont>/src/search_memory.py` — 你會 import 的 `search()` 函式
 
 ## 執行流程
 
@@ -36,7 +36,7 @@
 
 ## 範圍：DO NOT
 
-- ❌ 動 `~/.claude/CLAUDE.md` 或 `claudehome/CLAUDE.md`（user content，非 Symbiont 範圍）
+- ❌ 動 `~/.claude/CLAUDE.md` 或專案 CLAUDE.md（user content，非 Symbiont 範圍）
 - ❌ 動 `~/.claude/settings.json`（self-pilot 由用戶執行，你只負責驗證 hook script 本身）
 - ❌ 改 `src/search_memory.py` 的演算法（M10 已定型，只能驗證 import 介面）
 - ❌ 寫 `setup/install-m9-hook.py`（Phase A.2，gate 通過才做）
